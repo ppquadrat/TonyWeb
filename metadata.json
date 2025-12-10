@@ -1,0 +1,5 @@
+{
+  "name": "Tony Web V1 ",
+  "description": "A web-based visual interface for pitch analysis and f0 extraction, inspired by the Tony software.",
+  "requestFramePermissions": []
+}
