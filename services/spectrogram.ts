@@ -132,7 +132,7 @@ export const generateSpectrogram = async (
   const workerUrl = URL.createObjectURL(blob);
   const worker = new Worker(workerUrl);
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     worker.onmessage = (e) => {
       resolve(e.data);
       worker.terminate();

@@ -78,7 +78,7 @@ export const generateSVL = (
 <!DOCTYPE sv>
 <sv>
   <data>
-    <model id="1" name="" sampleRate="${sampleRate}" start="0" end="${pitchData.length > 0 ? Math.ceil(pitchData[pitchData.length-1].timestamp * sampleRate) : 0}" type="sparse" dimensions="1" resolution="1" notifyOnAdd="true" dataset="2" subtype="rectangular" minimum="0" maximum="1200" units="Hz" />
+    <model id="1" name="${layerName}" sampleRate="${sampleRate}" start="0" end="${pitchData.length > 0 ? Math.ceil(pitchData[pitchData.length-1].timestamp * sampleRate) : 0}" type="sparse" dimensions="1" resolution="1" notifyOnAdd="true" dataset="2" subtype="rectangular" minimum="0" maximum="1200" units="Hz" />
     <dataset id="2" dimensions="1">`;
 
     // Add Pitch Points

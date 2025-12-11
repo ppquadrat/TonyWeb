@@ -108,7 +108,6 @@ export const drawSpectrogram = (
                      norm = Math.pow(norm, 3.0);
                      const val = Math.floor((1 - norm) * 255);
                      
-                     let alpha = 255;
                      if (f0_y > 0 && Math.abs(y - f0_y) < 10) { 
                          const dist = Math.abs(y - f0_y);
                          const factor = dist / 10;

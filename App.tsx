@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import Controls from './components/Controls';
 import WaveformNavigator from './components/WaveformNavigator';
 import PitchVisualizer from './components/PitchVisualizer';
@@ -8,7 +8,7 @@ import { audioService } from './services/audioService';
 import { extractPitch, YIN_HOP_SIZE } from './services/yin';
 import { generateSpectrogram } from './services/spectrogram';
 import { generateProjectJSON, generatePitchCSV, generateNotesCSV, generateSVL, parseProjectJSON, parseCSV } from './services/exportService';
-import { AnalysisState, MixerState, PitchFrame, Note, SpectrogramData } from './types';
+import { MixerState, PitchFrame, Note, SpectrogramData } from './types';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush } from './utils/noteUtils';
@@ -659,7 +659,7 @@ function App() {
         onZoomIn={() => setCenteredZoom(Math.min(zoom * 1.5, 1000))}
         onZoomOut={() => setCenteredZoom(Math.max(zoom / 1.5, 10))}
         onFileLoad={handleFileSelect} onExtractPitch={handleExtractPitch}
-        onSaveProject={handleSaveProject} onLoadProject={handleLoadProject}
+        onSaveProject={handleSaveProject} onSaveAsProject={handleSaveAsProject} onLoadProject={handleLoadProject}
         onExportPitchCSV={handleExportPitchCSV} onExportNotesCSV={handleExportNotesCSV} onExportSVL={handleExportSVL}
         onImportPitch={handleImportPitch} onImportNotes={handleImportNotes}
         isAnalyzing={analysisStatus.isAnalyzing} isRecalculating={isRecalculating}
@@ -748,7 +748,7 @@ function App() {
 
       <Mixer 
         mixerState={mixerState} 
-        onUpdate={useCallback((u) => setMixerState(p => ({ ...p, ...u })), [])}
+        onUpdate={useCallback((u: Partial<MixerState>) => setMixerState(p => ({ ...p, ...u })), [])}
         showSpectrogram={showSpectrogram}
         onToggleSpectrogram={() => setShowSpectrogram(!showSpectrogram)}
         showPitch={showPitch} onTogglePitch={() => setShowPitch(!showPitch)}

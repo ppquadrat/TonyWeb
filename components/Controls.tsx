@@ -17,6 +17,7 @@ interface ControlsProps {
   
   // File Operations
   onSaveProject: () => void;
+  onSaveAsProject: () => void;
   onLoadProject: (file: File) => void;
   onExportPitchCSV: () => void;
   onExportNotesCSV: () => void;
@@ -62,6 +63,7 @@ const Controls: React.FC<ControlsProps> = ({
   onFileLoad,
   onExtractPitch,
   onSaveProject,
+  onSaveAsProject,
   onLoadProject,
   onExportPitchCSV,
   onExportNotesCSV,
@@ -171,6 +173,9 @@ const Controls: React.FC<ControlsProps> = ({
                     </button>
                     <button onClick={() => { onSaveProject(); setShowFileMenu(false); }} disabled={!hasData} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 disabled:opacity-50">
                         <Save size={14} /> Save Project (.json)
+                    </button>
+                    <button onClick={() => { onSaveAsProject(); setShowFileMenu(false); }} disabled={!hasData} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 disabled:opacity-50">
+                        <Save size={14} /> Save Project As...
                     </button>
                     <button onClick={() => { projectInputRef.current?.click(); setShowFileMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2">
                         <FolderOpen size={14} /> Load Project...
