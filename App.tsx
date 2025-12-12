@@ -652,7 +652,7 @@ function App() {
      const note = analysis.notes.find(n => n.id === noteId);
      if (note && audioBuffer) {
         // 1. Calculate Context Selection (e.g. Note + 2 seconds or neighboring notes)
-        const range = getNoteContextRange(note, analysis.notes, 2.0); // 2 seconds context
+        const range = getNoteContextRange(note, 2.0); // 2 seconds context
         setSelectionRange(range);
         setIsLooping(true);
         // 2. Lock Note
