@@ -1,8 +1,13 @@
+
 # TonyWeb V0.1
 
 **A web-based visual interface for pitch analysis and note segmentation.**
 
 TonyWeb is a modern browser port of the **Tony** software, designed for the scientific analysis of intonation in solo vocal recordings. It allows users to visualize pitch (f0), correct extraction errors, and segment continuous pitch curves into discrete notes.
+
+**NEW:** Unlike the original Tony software, TonyWeb allows users to **manually correct the pitch of individual notes** by dragging them vertically, with immediate auditory feedback in the musical context.
+
+*Note: This version does not yet provide automatic note segmentation (HMM); it is designed for high-precision manual segmentation and correction workflows.*
 
 ## Credits & Acknowledgements
 
@@ -43,11 +48,15 @@ If the algorithm makes a mistake (e.g., octave error), you can correct it:
 
 ### 4. Note Segmentation
 The light blue blocks represent discrete notes.
+
 *   **Create/Merge Note:** Select a region and press `=` (Equal Sign). This creates a new note based on the median pitch of the selection. If notes already exist there, it merges/replaces them.
-*   **Select Note:** Double-click a blue note block to select it exactly.
-*   **Adjust Boundaries:** Drag the left or right edge of a selected region.
-    *   *Smart Resize:* Dragging a note boundary will automatically push neighboring notes to prevent overlaps.
-    *   *Snap:* Boundaries snap to other notes. Hold `Shift` to disable snapping.
+*   **Adjust Boundaries:** Simply hover over the left or right edge of a note (cursor changes to `<->`). Click and drag to resize.
+    *   *Smart Resize:* Dragging a boundary will automatically push neighboring notes to prevent overlaps.
+    *   *Snap:* Boundaries snap to the nearest audio frame and adjacent notes. Hold `Shift` to disable snapping.
+*   **Correct Note Pitch (Innovation):**
+    1.  **Double-click** a note body. This selects the note and automatically highlights a "musical context" region (neighboring notes).
+    2.  **Drag** the note body up or down to adjust its pitch.
+    3.  **Release** the mouse to automatically hear the note played back within its context for auditory verification.
 *   **Split Note:** Place the red playback cursor where you want to cut, then press `/` (Forward Slash) or click the Scissors icon.
 *   **Delete Note:** Select a region containing notes and press `Backspace` or `Delete`.
 
@@ -93,5 +102,5 @@ npm install
 
 **Run Locally:**
 ```bash
-npm start
+npm run dev
 ```

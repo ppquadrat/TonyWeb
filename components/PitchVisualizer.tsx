@@ -1,7 +1,9 @@
 
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { PitchFrame, Note, SpectrogramData } from '../types';
-import { drawSpectrogram, drawGrid, drawNotes, drawPitchCurve, drawCandidates, drawSelection } from '../utils/renderUtils';
+import { drawSpectrogram, drawGrid, drawNotes, drawPitchCurve, drawCandidates, drawSelection, freqToY, yToFreq, hzToNoteName } from '../utils/renderUtils';
+import { getSnappedTime, findNoteInteraction, InteractionMode } from '../utils/interactionUtils';
+import { DIMENSIONS, COLORS } from '../constants';
 
 interface PitchVisualizerProps {
   pitchData: PitchFrame[];
@@ -23,9 +25,13 @@ interface PitchVisualizerProps {
   onZoomWheel: (deltaY: number, mouseTime: number) => void;
   onSelectionChange: (range: [number, number] | null) => void;
   onNoteResize: (noteId: string, newStart: number, newEnd: number) => void;
+  
+  // Note Pitch Editing
+  selectedNoteId: string | null;
+  onNoteSelect: (noteId: string) => void;
+  onNotePitchChange: (noteId: string, newPitch: number) => void;
+  onPitchDragEnd: (noteId: string, newPitch: number) => void;
 }
-
-type InteractionMode = 'NONE' | 'SELECTING' | 'RESIZE_START' | 'RESIZE_END';
 
 const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   pitchData,
@@ -46,7 +52,11 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   onSeek,
   onZoomWheel,
   onSelectionChange,
-  onNoteResize
+  onNoteResize,
+  selectedNoteId,
+  onNoteSelect,
+  onNotePitchChange,
+  onPitchDragEnd
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -63,6 +73,21 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   
   const selectionAnchorRef = useRef<number>(0); // Snapped time for selection logic
   const initialSelectionRef = useRef<[number, number] | null>(null);
+
+  // Direct Note Resizing State
+  const activeNoteIdRef = useRef<string | null>(null);
+  const activeNoteInitialBoundsRef = useRef<[number, number] | null>(null);
+  
+  // Dragged Note State (Visuals) & Ref (Logic)
+  const [draggedNoteState, setDraggedNoteState] = useState<{id: string, start: number, end: number, pitch?: number} | null>(null);
+  const draggedNoteRef = useRef<{id: string, start: number, end: number, pitch?: number} | null>(null);
+
+  // Vertical Drag State
+  const initialDragYRef = useRef<number>(0);
+  const initialNotePitchRef = useRef<number>(0);
+
+  // Hover Info State
+  const [hoveredNoteInfo, setHoveredNoteInfo] = useState<{ onset: number, pitch: number } | null>(null);
 
   // Handle Scroll
   const handleScroll = () => {
@@ -98,55 +123,33 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     }
   };
 
-  const getTimeAtMouse = (clientX: number) => {
-    if (!containerRef.current) return 0;
+  const getMouseInfo = (clientX: number, clientY: number) => {
+    if (!containerRef.current) return { time: 0, y: 0 };
     const rect = containerRef.current.getBoundingClientRect();
     const scrollLeft = containerRef.current.scrollLeft;
-    const x = clientX - rect.left;
-    return Math.max(0, Math.min(duration, (scrollLeft + x) / zoom));
-  };
-
-  // Snap Logic
-  const getSnappedTime = (time: number, e?: React.MouseEvent) => {
-    if (e?.shiftKey) return time;
-
-    const SNAP_THRESHOLD_PX = 10;
-    const thresholdSeconds = SNAP_THRESHOLD_PX / zoom;
     
-    let bestTime = time;
-    let minDiff = thresholdSeconds;
-
-    notes.forEach(note => {
-        const diffStart = Math.abs(time - note.start);
-        if (diffStart < minDiff) {
-            minDiff = diffStart;
-            bestTime = note.start;
-        }
-        const diffEnd = Math.abs(time - note.end);
-        if (diffEnd < minDiff) {
-            minDiff = diffEnd;
-            bestTime = note.end;
-        }
-    });
-
-    if (minDiff === thresholdSeconds && frameDuration > 0) {
-        const gridTime = Math.round(time / frameDuration) * frameDuration;
-        bestTime = gridTime;
-    }
-
-    if (Math.abs(time - 0) < minDiff) bestTime = 0;
-    if (Math.abs(time - duration) < minDiff) bestTime = duration;
-
-    return bestTime;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    
+    const time = Math.max(0, Math.min(duration, (scrollLeft + x) / zoom));
+    return { time, y };
   };
 
   // Handle Double Click to Select Note
   const handleDoubleClick = (e: React.MouseEvent) => {
-    const time = getTimeAtMouse(e.clientX);
-    const note = notes.find(n => time >= n.start && time <= n.end);
+    const { time, y } = getMouseInfo(e.clientX, e.clientY);
+    const NOTE_HEIGHT = DIMENSIONS.noteInteractionHeight; 
+
+    const note = notes.find(n => {
+        const nY = freqToY(n.pitch, containerHeight);
+        const inTime = time >= n.start && time <= n.end;
+        const inPitch = Math.abs(y - nY) < NOTE_HEIGHT;
+        return inTime && inPitch;
+    });
     
     if (note) {
-        onSelectionChange([note.start, note.end]);
+        // Trigger context selection logic in App
+        onNoteSelect(note.id);
     }
   };
 
@@ -154,26 +157,48 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     if (e.button !== 0) return;
     e.preventDefault(); 
     
-    const rawTime = getTimeAtMouse(e.clientX);
-    
+    const { time: rawTime, y: mouseY } = getMouseInfo(e.clientX, e.clientY);
     dragStartRef.current = rawTime;
 
-    const handleThreshold = 5 / zoom; 
     let mode: InteractionMode = 'SELECTING';
     
-    // 1. Check Resize Handles (Highest Priority)
-    if (selectionRange) {
+    // 1. Check Note Interactions
+    if (showNotes) {
+        const interaction = findNoteInteraction(rawTime, mouseY, notes, zoom, containerHeight, selectedNoteId);
+        if (interaction) {
+            mode = interaction.mode;
+            activeNoteIdRef.current = interaction.noteId;
+            activeNoteInitialBoundsRef.current = interaction.bounds;
+            
+            // Store initial pitch for vertical drag
+            initialDragYRef.current = mouseY;
+            initialNotePitchRef.current = interaction.pitch || 0;
+
+            const newState = { 
+                id: interaction.noteId, 
+                start: interaction.bounds[0], 
+                end: interaction.bounds[1],
+                pitch: interaction.pitch
+            };
+            setDraggedNoteState(newState);
+            draggedNoteRef.current = newState;
+        }
+    }
+
+    // 2. Check Selection Handles (Secondary Priority)
+    if (mode === 'SELECTING' && selectionRange) {
+        const handleThreshold = DIMENSIONS.handleThresholdPx / zoom;
         const [start, end] = selectionRange;
         if (Math.abs(rawTime - start) < handleThreshold) {
-            mode = 'RESIZE_START';
+            mode = 'RESIZE_SELECTION_START';
         } else if (Math.abs(rawTime - end) < handleThreshold) {
-            mode = 'RESIZE_END';
+            mode = 'RESIZE_SELECTION_END';
         }
     }
     
-    // Determine the anchor point for the operation
+    // Determine the anchor point for selection operations
     if (mode === 'SELECTING') {
-        selectionAnchorRef.current = getSnappedTime(rawTime, e);
+        selectionAnchorRef.current = getSnappedTime(rawTime, notes, zoom, frameDuration, duration, null, e.shiftKey);
     }
 
     initialSelectionRef.current = selectionRange;
@@ -181,16 +206,40 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    const rawTime = getTimeAtMouse(e.clientX);
-    const snappedTime = getSnappedTime(rawTime, e); 
+    const { time: rawTime, y: mouseY } = getMouseInfo(e.clientX, e.clientY);
+    const snappedTime = getSnappedTime(rawTime, notes, zoom, frameDuration, duration, activeNoteIdRef.current, e.shiftKey); 
 
-    // Update Cursor Style
+    // Update Cursor Style & Hover Info
     if (interactionMode === 'NONE' && containerRef.current) {
-        const handleThreshold = 5 / zoom;
         let cursor = 'crosshair';
+        let foundHoverNote = null;
         
-        // Check Handles
-        if (selectionRange) {
+        if (showNotes) {
+            // Re-use logic for finding hover targets, but simplified for display
+            const NOTE_HALF_HEIGHT = DIMENSIONS.noteInteractionHeight / 2;
+            const hoveredNote = notes.find(note => {
+                const noteY = freqToY(note.pitch, containerHeight);
+                const inTime = rawTime >= note.start && rawTime <= note.end;
+                const inPitch = Math.abs(mouseY - noteY) < NOTE_HALF_HEIGHT;
+                return inTime && inPitch;
+            });
+            
+            if (hoveredNote) {
+                foundHoverNote = { onset: hoveredNote.start, pitch: hoveredNote.pitch };
+            }
+
+            // Check boundaries for cursor change
+            const interaction = findNoteInteraction(rawTime, mouseY, notes, zoom, containerHeight, selectedNoteId);
+            if (interaction) {
+                if (interaction.mode === 'MOVE_VERTICAL') cursor = 'ns-resize';
+                else cursor = 'ew-resize';
+            }
+        }
+        setHoveredNoteInfo(foundHoverNote);
+
+        // Check Selection Handles
+        if (cursor === 'crosshair' && selectionRange) {
+            const handleThreshold = DIMENSIONS.handleThresholdPx / zoom;
             const [start, end] = selectionRange;
             if (Math.abs(rawTime - start) < handleThreshold || Math.abs(rawTime - end) < handleThreshold) {
                 cursor = 'col-resize';
@@ -206,21 +255,63 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
             const start = Math.min(anchor, snappedTime);
             const end = Math.max(anchor, snappedTime);
             onSelectionChange([start, end]);
-        } else if (interactionMode === 'RESIZE_START' && initialSelectionRef.current) {
+
+        } else if (interactionMode === 'RESIZE_SELECTION_START' && initialSelectionRef.current) {
             const oldEnd = initialSelectionRef.current[1];
             const newStart = Math.min(snappedTime, oldEnd - 0.001);
             onSelectionChange([newStart, oldEnd]);
-        } else if (interactionMode === 'RESIZE_END' && initialSelectionRef.current) {
+
+        } else if (interactionMode === 'RESIZE_SELECTION_END' && initialSelectionRef.current) {
             const oldStart = initialSelectionRef.current[0];
             const newEnd = Math.max(snappedTime, oldStart + 0.001);
             onSelectionChange([oldStart, newEnd]);
-        } 
+
+        } else if (interactionMode === 'RESIZE_NOTE_START' && activeNoteInitialBoundsRef.current) {
+            const oldEnd = activeNoteInitialBoundsRef.current[1];
+            const newStart = Math.min(snappedTime, oldEnd - 0.001);
+            if (activeNoteIdRef.current && draggedNoteRef.current) {
+                const newState = { ...draggedNoteRef.current, start: newStart, end: oldEnd };
+                setDraggedNoteState(newState);
+                draggedNoteRef.current = newState;
+            }
+
+        } else if (interactionMode === 'RESIZE_NOTE_END' && activeNoteInitialBoundsRef.current) {
+            const oldStart = activeNoteInitialBoundsRef.current[0];
+            const newEnd = Math.max(snappedTime, oldStart + 0.001);
+            if (activeNoteIdRef.current && draggedNoteRef.current) {
+                const newState = { ...draggedNoteRef.current, start: oldStart, end: newEnd };
+                setDraggedNoteState(newState);
+                draggedNoteRef.current = newState;
+            }
+        } else if (interactionMode === 'MOVE_VERTICAL' && draggedNoteRef.current) {
+             // Calculate Pitch Change
+             const deltaY = mouseY - initialDragYRef.current;
+             const initialY = freqToY(initialNotePitchRef.current, containerHeight);
+             const newY = initialY + deltaY;
+             const newPitch = yToFreq(newY, containerHeight);
+             const newState = { ...draggedNoteRef.current, pitch: newPitch };
+             
+             setDraggedNoteState(newState);
+             draggedNoteRef.current = newState;
+        }
     }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
-    // Check Smart Resize
-    if ((interactionMode === 'RESIZE_START' || interactionMode === 'RESIZE_END') && initialSelectionRef.current && selectionRange) {
+    // Commit Smart Note Resize
+    if ((interactionMode === 'RESIZE_NOTE_START' || interactionMode === 'RESIZE_NOTE_END') && draggedNoteRef.current) {
+        onNoteResize(draggedNoteRef.current.id, draggedNoteRef.current.start, draggedNoteRef.current.end);
+    }
+    
+    // Commit Pitch Change
+    if (interactionMode === 'MOVE_VERTICAL' && draggedNoteRef.current && draggedNoteRef.current.pitch) {
+        onNotePitchChange(draggedNoteRef.current.id, draggedNoteRef.current.pitch);
+        // Trigger Auditory Feedback with explicit arguments
+        onPitchDragEnd(draggedNoteRef.current.id, draggedNoteRef.current.pitch);
+    }
+    
+    // Commit Smart Selection Resize
+    if ((interactionMode === 'RESIZE_SELECTION_START' || interactionMode === 'RESIZE_SELECTION_END') && initialSelectionRef.current && selectionRange) {
         const [initStart, initEnd] = initialSelectionRef.current;
         const [currStart, currEnd] = selectionRange;
         const matchingNote = notes.find(n => Math.abs(n.start - initStart) < 0.001 && Math.abs(n.end - initEnd) < 0.001);
@@ -230,9 +321,10 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     }
 
     if (interactionMode === 'SELECTING') {
-        const time = getTimeAtMouse(e.clientX);
+        const { time } = getMouseInfo(e.clientX, e.clientY);
         const diff = Math.abs(time - dragStartRef.current);
         if (diff < (3 / zoom)) { 
+             // Click (not drag)
              if (!selectionRange || (time < selectionRange[0] || time > selectionRange[1])) {
                  onSelectionChange(null);
                  onSeek(time);
@@ -244,6 +336,10 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     
     // Clear Drag State
     setInteractionMode('NONE');
+    setDraggedNoteState(null);
+    draggedNoteRef.current = null;
+    activeNoteIdRef.current = null;
+    activeNoteInitialBoundsRef.current = null;
   };
 
   // --- DRAW CANVAS ---
@@ -259,7 +355,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     const visibleWidth = window.innerWidth;
 
     // 1. Clear & Background
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = COLORS.background;
     ctx.fillRect(0, 0, width, containerHeight);
 
     // 2. Spectrogram
@@ -277,7 +373,13 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
 
     // 5. Notes
     if (showNotes) {
-        drawNotes(ctx, notes, viewStartTime, zoom, visibleWidth, containerHeight);
+        // If we are dragging a note, we temporarily swap the original note with the dragged state for rendering
+        const displayNotes = draggedNoteState 
+            ? notes.map(n => n.id === draggedNoteState.id ? { ...n, start: draggedNoteState.start, end: draggedNoteState.end, pitch: draggedNoteState.pitch || n.pitch } : n)
+            : notes;
+
+        // Pass selected ID for highlighting
+        drawNotes(ctx, displayNotes, viewStartTime, zoom, visibleWidth, containerHeight, selectedNoteId);
     }
 
     // 6. Candidates
@@ -290,36 +392,46 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         drawPitchCurve(ctx, pitchData, viewStartTime, zoom, visibleWidth, containerHeight);
     }
     
-  }, [pitchData, notes, spectrogramData, showSpectrogram, width, zoom, containerHeight, selectionRange, showCandidates, viewStartTime, showPitch, showNotes, duration]);
+  }, [pitchData, notes, spectrogramData, showSpectrogram, width, zoom, containerHeight, selectionRange, showCandidates, viewStartTime, showPitch, showNotes, duration, draggedNoteState, selectedNoteId]);
 
   return (
-    <div 
-        ref={containerRef} 
-        className="flex-1 overflow-hidden bg-white relative select-none"
-        style={{ height: containerHeight }}
-        onScroll={handleScroll}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onDoubleClick={handleDoubleClick}
-        onMouseLeave={() => setInteractionMode('NONE')}
-    >
-      <canvas 
-        ref={canvasRef}
-        className="block"
-        width={width}
-        height={containerHeight}
-        style={{ width: width, height: containerHeight }}
-      />
-      
-      <div 
-        className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none opacity-80"
-        style={{ 
-          left: `${currentTime * zoom}px`,
-          height: containerHeight 
-        }}
-      />
+    <div className="flex-1 relative overflow-hidden bg-white">
+        <div 
+            ref={containerRef} 
+            className="w-full h-full overflow-hidden bg-white relative select-none"
+            style={{ height: containerHeight }}
+            onScroll={handleScroll}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onDoubleClick={handleDoubleClick}
+            onMouseLeave={() => { setInteractionMode('NONE'); setDraggedNoteState(null); draggedNoteRef.current = null; setHoveredNoteInfo(null); }}
+        >
+        <canvas 
+            ref={canvasRef}
+            className="block"
+            width={width}
+            height={containerHeight}
+            style={{ width: width, height: containerHeight }}
+        />
+        
+        <div 
+            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none opacity-80"
+            style={{ 
+            left: `${currentTime * zoom}px`,
+            height: containerHeight 
+            }}
+        />
+        </div>
+
+        {/* Hover Info Overlay - Now positioned relative to the Viewport Wrapper */}
+        {hoveredNoteInfo && (
+            <div className="absolute top-4 right-4 z-20 bg-black/70 text-white text-xs px-2 py-1 rounded shadow pointer-events-none font-mono">
+                <span className="mr-3">Onset: {hoveredNoteInfo.onset.toFixed(3)}s</span>
+                <span>{hoveredNoteInfo.pitch.toFixed(1)}Hz ({hzToNoteName(hoveredNoteInfo.pitch)})</span>
+            </div>
+        )}
     </div>
   );
 };

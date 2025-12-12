@@ -1,27 +1,34 @@
 
 import { PitchFrame, Note, SpectrogramData } from '../types';
-
-export const MIN_PITCH = 50;
-export const MAX_PITCH = 5000;
-export const RULER_HEIGHT = 20;
+import { COLORS, DIMENSIONS, ANALYSIS } from '../constants';
 
 // Coordinate helpers
 export const freqToY = (f: number, containerHeight: number) => {
     const logF = Math.log(f);
-    const logMin = Math.log(MIN_PITCH);
-    const logMax = Math.log(MAX_PITCH);
+    const logMin = Math.log(ANALYSIS.minPitch);
+    const logMax = Math.log(ANALYSIS.maxPitch);
     const normalized = (logF - logMin) / (logMax - logMin);
-    const availableHeight = containerHeight - RULER_HEIGHT;
+    const availableHeight = containerHeight - DIMENSIONS.rulerHeight;
     return (containerHeight) - (normalized * availableHeight);
 };
 
 export const yToFreq = (y: number, containerHeight: number) => {
-     const availableHeight = containerHeight - RULER_HEIGHT;
+     const availableHeight = containerHeight - DIMENSIONS.rulerHeight;
      const normalized = (containerHeight - y) / availableHeight;
-     const logMin = Math.log(MIN_PITCH);
-     const logMax = Math.log(MAX_PITCH);
+     const logMin = Math.log(ANALYSIS.minPitch);
+     const logMax = Math.log(ANALYSIS.maxPitch);
      const logF = normalized * (logMax - logMin) + logMin;
      return Math.exp(logF);
+};
+
+export const hzToNoteName = (hz: number): string => {
+    if (hz <= 0) return '';
+    const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const midi = 69 + 12 * Math.log2(hz / 440);
+    const rounded = Math.round(midi);
+    const note = NOTES[rounded % 12];
+    const oct = Math.floor(rounded / 12) - 1;
+    return `${note}${oct}`;
 };
 
 export const formatTime = (seconds: number, interval: number) => {
@@ -51,7 +58,7 @@ export const drawSpectrogram = (
     const { magnitude2d, width: specWidth, height: specHeight, maxMagnitude } = spectrogramData;
 
     const imgWidth = Math.ceil(visibleWidth);
-    const imgHeight = containerHeight - RULER_HEIGHT;
+    const imgHeight = containerHeight - DIMENSIONS.rulerHeight;
     if (imgWidth <= 0 || imgHeight <= 0) return;
 
     const imageData = ctx.createImageData(imgWidth, imgHeight);
@@ -67,7 +74,7 @@ export const drawSpectrogram = (
             while(pIdx < pitchData.length - 1 && pitchData[pIdx + 1].timestamp <= time) pIdx++;
             const frame = pitchData[pIdx];
             if (frame && Math.abs(frame.timestamp - time) < (0.1) && frame.hasPitch) {
-                pitchMap[x] = freqToY(frame.frequency, containerHeight) - RULER_HEIGHT;
+                pitchMap[x] = freqToY(frame.frequency, containerHeight) - DIMENSIONS.rulerHeight;
             }
         }
     }
@@ -75,7 +82,7 @@ export const drawSpectrogram = (
     // Pre-calc Y to Bin mapping
     const binMap = new Float32Array(imgHeight);
     for(let y = 0; y < imgHeight; y++) {
-         const canvasY = y + RULER_HEIGHT;
+         const canvasY = y + DIMENSIONS.rulerHeight;
          const freq = yToFreq(canvasY, containerHeight);
          const nyquist = 22050; // Approx
          const bin = (freq / nyquist) * specHeight;
@@ -103,7 +110,7 @@ export const drawSpectrogram = (
                      const mag = m1 + (m2 - m1) * frac;
                      
                      let db = 20 * Math.log10(mag / maxMagnitude + 1e-6); 
-                     let norm = (db + 50) / 50; 
+                     let norm = (db + ANALYSIS.spectrogramDbRange) / ANALYSIS.spectrogramDbRange; 
                      norm = Math.max(0, Math.min(1, norm));
                      norm = Math.pow(norm, 3.0);
                      const val = Math.floor((1 - norm) * 255);
@@ -122,7 +129,7 @@ export const drawSpectrogram = (
              }
          }
     }
-    ctx.putImageData(imageData, viewStartTime * zoom, RULER_HEIGHT);
+    ctx.putImageData(imageData, viewStartTime * zoom, DIMENSIONS.rulerHeight);
 };
 
 export const drawGrid = (
@@ -136,7 +143,7 @@ export const drawGrid = (
     const visibleEndX = visibleStartX + visibleWidth;
 
     // Frequency Grid
-    ctx.strokeStyle = '#e5e7eb';
+    ctx.strokeStyle = COLORS.gridLine;
     ctx.lineWidth = 1;
     ctx.font = '10px monospace';
     ctx.textBaseline = 'middle';
@@ -146,17 +153,17 @@ export const drawGrid = (
         ctx.moveTo(visibleStartX, y);
         ctx.lineTo(visibleEndX, y);
         ctx.stroke();
-        ctx.fillStyle = '#6b7280';
+        ctx.fillStyle = COLORS.gridText;
         ctx.fillText(`${f}Hz`, visibleStartX + 5, y - 6);
     });
 
     // Time Ruler
-    ctx.fillStyle = '#f9fafb'; 
-    ctx.fillRect(visibleStartX, 0, visibleWidth, RULER_HEIGHT);
+    ctx.fillStyle = COLORS.rulerBackground; 
+    ctx.fillRect(visibleStartX, 0, visibleWidth, DIMENSIONS.rulerHeight);
     ctx.beginPath();
-    ctx.strokeStyle = '#d1d5db'; 
-    ctx.moveTo(visibleStartX, RULER_HEIGHT);
-    ctx.lineTo(visibleEndX, RULER_HEIGHT);
+    ctx.strokeStyle = COLORS.rulerLine; 
+    ctx.moveTo(visibleStartX, DIMENSIONS.rulerHeight);
+    ctx.lineTo(visibleEndX, DIMENSIONS.rulerHeight);
     ctx.stroke();
 
     const minPxPerTick = 100;
@@ -166,7 +173,7 @@ export const drawGrid = (
         if (val * zoom >= minPxPerTick) { timeInterval = val; break; }
     }
 
-    ctx.fillStyle = '#4b5563'; 
+    ctx.fillStyle = COLORS.rulerText; 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.font = '10px sans-serif';
@@ -178,14 +185,14 @@ export const drawGrid = (
         const x = t * zoom;
         ctx.beginPath();
         ctx.strokeStyle = '#f3f4f6'; 
-        ctx.moveTo(x, RULER_HEIGHT);
+        ctx.moveTo(x, DIMENSIONS.rulerHeight);
         ctx.lineTo(x, containerHeight);
         ctx.stroke();
 
         ctx.beginPath();
         ctx.strokeStyle = '#9ca3af'; 
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, RULER_HEIGHT - 5);
+        ctx.lineTo(x, DIMENSIONS.rulerHeight - 5);
         ctx.stroke();
 
         const label = formatTime(t, timeInterval);
@@ -199,25 +206,30 @@ export const drawNotes = (
     viewStartTime: number,
     zoom: number,
     visibleWidth: number,
-    containerHeight: number
+    containerHeight: number,
+    selectedNoteId?: string | null
 ) => {
-    ctx.fillStyle = '#93c5fd'; 
-    ctx.strokeStyle = '#3b82f6'; 
-    const NOTE_HEIGHT_PX = 14; 
     const visibleNotes = notes.filter(n => n.end > viewStartTime && n.start < viewStartTime + (visibleWidth/zoom));
 
     visibleNotes.forEach(note => {
         const x = note.start * zoom;
         const w = (note.end - note.start) * zoom;
         const yCenter = freqToY(note.pitch, containerHeight);
-        const y = yCenter - (NOTE_HEIGHT_PX / 2);
-        const visibleY = Math.max(RULER_HEIGHT, y);
+        const y = yCenter - (DIMENSIONS.noteHeight / 2);
+        const visibleY = Math.max(DIMENSIONS.rulerHeight, y);
         
+        const isSelected = note.id === selectedNoteId;
+
+        // Fill
+        ctx.fillStyle = isSelected ? COLORS.noteSelectedFill : COLORS.noteDefaultFill; 
         ctx.globalAlpha = 0.7;
-        ctx.fillRect(x, visibleY, w, NOTE_HEIGHT_PX);
+        ctx.fillRect(x, visibleY, w, DIMENSIONS.noteHeight);
+        
+        // Border
         ctx.globalAlpha = 1.0;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, visibleY, w, NOTE_HEIGHT_PX);
+        ctx.strokeStyle = isSelected ? COLORS.noteSelectedBorder : COLORS.noteDefaultBorder; 
+        ctx.lineWidth = isSelected ? 2 : 1;
+        ctx.strokeRect(x, visibleY, w, DIMENSIONS.noteHeight);
     });
 };
 
@@ -229,22 +241,21 @@ export const drawPitchCurve = (
     visibleWidth: number,
     containerHeight: number
 ) => {
-    ctx.fillStyle = '#000000'; 
-    const pointRadius = 1.2;
+    ctx.fillStyle = COLORS.pitchCurve; 
     let pIdx = 0;
     while(pIdx < pitchData.length && pitchData[pIdx].timestamp < viewStartTime) pIdx++;
     
     for(let i = pIdx; i < pitchData.length; i++) {
         const frame = pitchData[i];
         if (frame.timestamp > viewStartTime + (visibleWidth/zoom)) break;
-        if (!frame.hasPitch || frame.frequency < MIN_PITCH || frame.frequency > MAX_PITCH) continue;
+        if (!frame.hasPitch || frame.frequency < ANALYSIS.minPitch || frame.frequency > ANALYSIS.maxPitch) continue;
         
         const x = frame.timestamp * zoom;
         const y = freqToY(frame.frequency, containerHeight);
-        if (y < RULER_HEIGHT) continue;
+        if (y < DIMENSIONS.rulerHeight) continue;
 
         ctx.beginPath();
-        ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
+        ctx.arc(x, y, DIMENSIONS.pitchPointRadius, 0, Math.PI * 2);
         ctx.fill();
     }
 };
@@ -259,7 +270,7 @@ export const drawCandidates = (
     selectionRange: [number, number]
 ) => {
       const [selStart, selEnd] = selectionRange;
-      ctx.fillStyle = '#eab308'; // yellow-500
+      ctx.fillStyle = COLORS.candidate;
       
       let startIdx = 0;
       while(startIdx < pitchData.length && pitchData[startIdx].timestamp < selStart) startIdx++;
@@ -272,13 +283,12 @@ export const drawCandidates = (
           if (frame.candidates) {
             const x = frame.timestamp * zoom;
             frame.candidates.forEach(cand => {
-                if (cand.frequency < MIN_PITCH || cand.frequency > MAX_PITCH) return;
-                const r = 2.5; 
+                if (cand.frequency < ANALYSIS.minPitch || cand.frequency > ANALYSIS.maxPitch) return;
                 const y = freqToY(cand.frequency, containerHeight);
-                if (y < RULER_HEIGHT) return;
+                if (y < DIMENSIONS.rulerHeight) return;
 
                 ctx.beginPath();
-                ctx.arc(x, y, r, 0, Math.PI * 2);
+                ctx.arc(x, y, DIMENSIONS.candidateRadius, 0, Math.PI * 2);
                 ctx.fill();
             });
           }
@@ -301,24 +311,24 @@ export const drawSelection = (
     
     // Draw background highlight
     if (x2 > visibleStartX && x1 < visibleEndX) {
-        ctx.fillStyle = 'rgba(219, 234, 254, 0.5)'; 
+        ctx.fillStyle = COLORS.selectionBackground; 
         ctx.fillRect(x1, 0, x2 - x1, containerHeight);
     }
 
-    ctx.strokeStyle = '#3b82f6'; 
+    ctx.strokeStyle = COLORS.selectionBorder; 
     ctx.lineWidth = 1;
     
     if (x1 > visibleStartX && x1 < visibleEndX) {
         ctx.beginPath(); ctx.moveTo(x1, 0); ctx.lineTo(x1, containerHeight); ctx.stroke();
         const handleSize = 6;
-        ctx.fillStyle = '#3b82f6';
+        ctx.fillStyle = COLORS.selectionBorder;
         ctx.beginPath(); ctx.moveTo(x1, 0); ctx.lineTo(x1 + handleSize, 0); ctx.lineTo(x1, handleSize); ctx.fill();
     }
 
     if (x2 > visibleStartX && x2 < visibleEndX) {
         ctx.beginPath(); ctx.moveTo(x2, 0); ctx.lineTo(x2, containerHeight); ctx.stroke();
         const handleSize = 6;
-        ctx.fillStyle = '#3b82f6';
+        ctx.fillStyle = COLORS.selectionBorder;
         ctx.beginPath(); ctx.moveTo(x2, 0); ctx.lineTo(x2 - handleSize, 0); ctx.lineTo(x2, handleSize); ctx.fill();
     }
 };

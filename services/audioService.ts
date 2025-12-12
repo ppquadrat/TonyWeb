@@ -61,8 +61,8 @@ export class AudioService {
     this.notesPanner = this.context.createStereoPanner();
     
     // Settings: f0 Left, Notes Right
-    this.pitchPanner.pan.value = -0.5; 
-    this.notesPanner.pan.value = 0.5;
+    this.pitchPanner.pan.value = -0.3; 
+    this.notesPanner.pan.value = 0.3;
 
     // Routing
     // Original -> Master (Dry)
@@ -169,7 +169,7 @@ export class AudioService {
       this.startPitchSynth(pitchData, startOffset, duration);
     }
 
-    // 3. Setup Note Synthesizer (Discrete - Vocal Engine)
+    // 3. Setup Note Synthesizer (Discrete)
     if (notes && notes.length > 0) {
         this.startNoteSynth(notes, startOffset, duration);
     }
@@ -185,7 +185,8 @@ export class AudioService {
     const wallDuration = duration !== undefined ? duration / this.playbackRate : undefined;
     const stopTime = wallDuration !== undefined ? now + wallDuration : undefined;
     
-    // Sound Design: "Humming" / "Theremin" sound (Sine + Triangle mix)
+    // Sound Design: Smooth "Humming" (Triangle)
+    // We make this softer (lower cutoff) to contrast with the bright notes
     this.synthOsc = this.context.createOscillator();
     this.synthOsc.type = 'triangle'; 
 
@@ -193,16 +194,16 @@ export class AudioService {
     this.vibratoOsc = this.context.createOscillator();
     this.vibratoOsc.frequency.value = 5.0; 
     this.vibratoGain = this.context.createGain();
-    this.vibratoGain.gain.value = 5; 
+    this.vibratoGain.gain.value = 3; // Reduced vibrato depth slightly
     
     this.vibratoOsc.connect(this.vibratoGain);
     this.vibratoGain.connect(this.synthOsc.detune);
     this.vibratoOsc.start(0);
 
-    // Filter
+    // Filter - Lower cutoff to make it background/bass-like
     const filter = this.context.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 600; 
+    filter.frequency.value = 400; // Lowered from 600
 
     this.synthGain = this.context.createGain();
     this.synthGain.gain.setValueAtTime(0, now); // Initialize to 0
@@ -227,7 +228,7 @@ export class AudioService {
         if (frame.hasPitch && frame.frequency > 0) {
             // Using linearRamp for more stable pitch tracking at slow speeds
             this.synthOsc?.frequency.linearRampToValueAtTime(frame.frequency, scheduleTime);
-            this.synthGain?.gain.linearRampToValueAtTime(0.8, scheduleTime);
+            this.synthGain?.gain.linearRampToValueAtTime(0.7, scheduleTime);
         } else {
             this.synthGain?.gain.linearRampToValueAtTime(0.0, scheduleTime);
         }
@@ -240,49 +241,47 @@ export class AudioService {
     }
   }
 
-  // --- FORMANT VOCAL ENGINE ---
-  private createVocalPatch(freq: number, startTime: number, dur: number): AudioNode[] {
+  // --- PULSE / CLARINET NOTE ENGINE ---
+  // Replaces the Formant Vocal engine for a snappier, clearer sound
+  private createPulseNotePatch(freq: number, startTime: number, dur: number): AudioNode[] {
      const t = startTime;
      
-     // 1. Source: Sawtooth (rich harmonics)
+     // 1. Source: Square Wave (Clarinet/Gameboy style) - Very distinct pitch
      const osc = this.context.createOscillator();
-     osc.type = 'sawtooth';
+     osc.type = 'square';
      osc.frequency.setValueAtTime(freq, t);
 
-     // 2. Formant Filters (Parallel) - Approximate "Ah" vowel for male voice
-     const f1 = this.context.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 600; f1.Q.value = 3.0;
-     const f2 = this.context.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 1200; f2.Q.value = 3.0;
-     const f3 = this.context.createBiquadFilter(); f3.type = 'bandpass'; f3.frequency.value = 2500; f3.Q.value = 3.0;
+     // 2. Filter: Lowpass to round off the harsh edges, but keep it bright
+     const filter = this.context.createBiquadFilter();
+     filter.type = 'lowpass';
+     filter.frequency.value = 2000;
+     filter.Q.value = 1;
 
-     // 3. Gains
-     const g1 = this.context.createGain(); g1.gain.value = 1.0;
-     const g2 = this.context.createGain(); g2.gain.value = 0.5; 
-     const g3 = this.context.createGain(); g3.gain.value = 0.2; 
-
-     // 4. Master Envelope for this note
+     // 3. Envelope
      const env = this.context.createGain();
      env.gain.setValueAtTime(0, t);
      
-     // ADSR (Scaled to duration)
-     // Ensure extremely short notes don't glitch
-     const attack = Math.min(0.05, dur * 0.2);
+     // ADSR
+     // Fast Attack for Snappy Onset
+     const attack = Math.min(0.015, dur * 0.1); 
+     const decay = Math.min(0.1, dur * 0.3);
      const release = Math.min(0.05, dur * 0.2);
+     const sustainLevel = 0.6;
      
-     env.gain.linearRampToValueAtTime(0.8, t + attack);
-     env.gain.setValueAtTime(0.8, t + dur - release);
+     env.gain.linearRampToValueAtTime(0.8, t + attack); // Peak volume
+     env.gain.linearRampToValueAtTime(sustainLevel, t + attack + decay); // Decay to sustain
+     env.gain.setValueAtTime(sustainLevel, t + dur - release);
      env.gain.linearRampToValueAtTime(0, t + dur);
 
      // Connect
-     osc.connect(f1); f1.connect(g1); g1.connect(env);
-     osc.connect(f2); f2.connect(g2); g2.connect(env);
-     osc.connect(f3); f3.connect(g3); g3.connect(env);
-
+     osc.connect(filter);
+     filter.connect(env);
      env.connect(this.notesGain);
 
      osc.start(t);
      osc.stop(t + dur);
 
-     return [osc, env, f1, f2, f3, g1, g2, g3];
+     return [osc, env, filter];
   }
 
   private startNoteSynth(notes: Note[], startOffset: number, duration?: number) {
@@ -310,7 +309,7 @@ export class AudioService {
 
           // Create a voice
           // Note: Pitch remains the same (note.pitch)
-          const nodes = this.createVocalPatch(note.pitch, noteStartTime, wallDur);
+          const nodes = this.createPulseNotePatch(note.pitch, noteStartTime, wallDur);
           this.activeNoteNodes.push(...nodes);
       });
   }

@@ -6,30 +6,48 @@ export interface HistoryItem<T> {
 }
 
 export function useUndoRedo<T>(initialState: T) {
-  const [history, setHistory] = useState<T[]>([initialState]);
-  const [index, setIndex] = useState(0);
+  // Use a single state object to ensure history and index update atomically.
+  // This prevents race conditions where index is out of bounds relative to history length.
+  const [state, setState] = useState({
+    history: [initialState],
+    index: 0
+  });
 
-  const currentState = history[index];
+  const { history, index } = state;
+  
+  // Safe retrieval with fallback
+  const currentState = history[index] || initialState;
 
   const commit = useCallback((newState: T) => {
-    setHistory(prev => {
-      const newHistory = prev.slice(0, index + 1);
-      return [...newHistory, newState];
+    setState(prev => {
+      const newHistory = prev.history.slice(0, prev.index + 1);
+      newHistory.push(newState);
+      return {
+        history: newHistory,
+        index: prev.index + 1
+      };
     });
-    setIndex(prev => prev + 1);
-  }, [index]);
+  }, []);
 
   const undo = useCallback(() => {
-    setIndex(prev => Math.max(0, prev - 1));
+    setState(prev => ({
+      ...prev,
+      index: Math.max(0, prev.index - 1)
+    }));
   }, []);
 
   const redo = useCallback(() => {
-    setIndex(prev => Math.min(history.length - 1, prev + 1));
-  }, [history.length]);
+    setState(prev => ({
+      ...prev,
+      index: Math.min(prev.history.length - 1, prev.index + 1)
+    }));
+  }, []);
 
   const reset = useCallback((newState: T) => {
-    setHistory([newState]);
-    setIndex(0);
+    setState({
+      history: [newState],
+      index: 0
+    });
   }, []);
 
   return {

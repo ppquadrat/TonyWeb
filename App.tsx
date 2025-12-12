@@ -11,8 +11,9 @@ import { generateProjectJSON, generatePitchCSV, generateNotesCSV, generateSVL, p
 import { MixerState, PitchFrame, Note, SpectrogramData } from './types';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush } from './utils/noteUtils';
+import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
+import { X } from 'lucide-react';
 
 function App() {
   // --- Audio & Playback State ---
@@ -26,6 +27,10 @@ function App() {
 
   // Selection: [start, end]
   const [selectionRange, setSelectionRange] = useState<[number, number] | null>(null);
+
+  // Note Selection (for Pitch Editing)
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [pitchInputValue, setPitchInputValue] = useState("");
 
   // --- Analysis & History via Hook ---
   // History stores { pitchData, notes }
@@ -84,6 +89,9 @@ function App() {
     viewportWidth, zoom, currentTime, fileName, playbackSpeed, viewStartTime
   });
 
+  // Find Selected Note object
+  const selectedNote = analysis.notes.find(n => n.id === selectedNoteId);
+
   useLayoutEffect(() => {
     stateRef.current = {
       isPlaying, isLooping, selectionRange, duration, audioBuffer,
@@ -101,6 +109,13 @@ function App() {
   useEffect(() => {
     audioService.updateMixer(mixerState);
   }, [mixerState]);
+
+  // Sync pitch input value when selected note pitch changes (drag or selection)
+  useEffect(() => {
+    if (selectedNote) {
+        setPitchInputValue(selectedNote.pitch.toFixed(2));
+    }
+  }, [selectedNote?.pitch, selectedNote?.id]);
 
   // --- Animation Loop ---
   const updateLoop = useCallback(() => {
@@ -193,6 +208,7 @@ function App() {
         setCurrentTime(0);
         setViewStartTime(0);
         setSelectionRange(null);
+        setSelectedNoteId(null);
         setSpectrogramData(null); // Reset spectrogram
         audioService.stop();
         setIsPlaying(false);
@@ -236,48 +252,61 @@ function App() {
         const sr = audioBuffer.sampleRate;
         setSelectionRange([snapTime(range[0], sr), snapTime(range[1], sr)]);
         setIsLooping(true);
+        // If the user manually changes selection, we might want to clear selected note? 
+        // For now keep it to allow complex editing, but could clear setSelectedNoteId(null);
     } else {
         setSelectionRange(range);
-        if (!range) setIsLooping(false);
+        if (!range) {
+            setIsLooping(false);
+            setSelectedNoteId(null); // Clear selected note on click outside
+        }
     }
   }, [audioBuffer]);
 
-  // --- Playback Controls ---
-  const handlePlayPause = useCallback(() => {
-    const state = stateRef.current;
-    if (!state.audioBuffer) return;
-
-    if (state.isPlaying) {
-      audioService.stop();
-      setIsPlaying(false);
-    } else {
+  // Helper to start playback using current state ref (avoids closure staleness)
+  const playInternal = (state: typeof stateRef.current) => {
+      if (!state.audioBuffer) return;
+      
       let startTime = state.currentTime;
       if (Math.abs(state.duration - startTime) < 0.1) startTime = 0;
 
       let playDuration = undefined;
       if (state.isLooping && state.selectionRange) {
         const [start, end] = state.selectionRange;
-        if (state.currentTime < start || state.currentTime >= end) startTime = start;
+        // If cursor is outside loop, jump to start
+        if (startTime < start || startTime >= end) startTime = start;
         playDuration = end - startTime;
       } else if (state.isLooping && !state.selectionRange) {
          playDuration = state.duration - startTime;
       }
 
-      // Jump view
+      // Jump view to center cursor
       const viewDuration = state.viewportWidth / state.zoom;
       setViewStartTime(Math.max(0, startTime - viewDuration / 2));
 
+      audioService.play(
+          state.audioBuffer, 
+          state.pitchData, 
+          state.notes, 
+          startTime, 
+          playDuration, 
+          state.playbackSpeed
+      );
+      
+      // Update React state to reflect playing
+      setCurrentTime(startTime); 
+      setIsPlaying(true);
+  };
+
+  // --- Playback Controls ---
+  const handlePlayPause = useCallback(() => {
+    const state = stateRef.current;
+    if (state.isPlaying) {
+      audioService.stop();
+      setIsPlaying(false);
+    } else {
       try {
-        audioService.play(
-            state.audioBuffer, 
-            state.pitchData, 
-            state.notes, 
-            startTime, 
-            playDuration, 
-            state.playbackSpeed // Use current speed
-        );
-        setCurrentTime(startTime); 
-        setIsPlaying(true);
+        playInternal(state);
       } catch (e) {
         console.error("Playback failed", e);
         setIsPlaying(false);
@@ -618,6 +647,55 @@ function App() {
     commitHistory({ ...analysis, notes: newNotes });
   }, [analysis, commitHistory]);
 
+  // --- Note & Pitch Operations (Double Click Workflow) ---
+  const handleNoteSelect = useCallback((noteId: string) => {
+     const note = analysis.notes.find(n => n.id === noteId);
+     if (note && audioBuffer) {
+        // 1. Calculate Context Selection (e.g. Note + 2 seconds or neighboring notes)
+        const range = getNoteContextRange(note, analysis.notes, 2.0); // 2 seconds context
+        setSelectionRange(range);
+        setIsLooping(true);
+        // 2. Lock Note
+        setSelectedNoteId(noteId);
+        // 3. Move playhead to start of selection
+        setCurrentTime(range[0]);
+     }
+  }, [analysis.notes, audioBuffer]);
+
+  const handleNotePitchChange = useCallback((id: string, newPitch: number) => {
+      const updatedNotes = analysis.notes.map(n => n.id === id ? { ...n, pitch: newPitch } : n);
+      commitHistory({ ...analysis, notes: updatedNotes });
+  }, [analysis, commitHistory]);
+
+  const handlePitchDragEnd = useCallback((id: string, newPitch: number) => {
+      // 1. Synchronously update the note list for playback
+      // Use the optimistically updated pitch since React state (from commitHistory)
+      // might not have propagated yet.
+      const optimisticNotes = stateRef.current.notes.map(n => n.id === id ? { ...n, pitch: newPitch } : n);
+      
+      const optimisticState = { ...stateRef.current, notes: optimisticNotes };
+
+      // 2. Restart Playback Synchronously
+      if (optimisticState.audioBuffer) {
+          audioService.stop();
+          playInternal(optimisticState);
+      }
+
+      // 3. Commit to History (Async React update)
+      // This ensures the visual state becomes permanent
+      handleNotePitchChange(id, newPitch);
+
+  }, [handleNotePitchChange]);
+
+  const handlePitchInputCommit = () => {
+    if (selectedNoteId && pitchInputValue) {
+        const val = parseFloat(pitchInputValue);
+        if (!isNaN(val) && val > 0) {
+            handlePitchDragEnd(selectedNoteId, val); // Use drag end logic to trigger play
+        }
+    }
+  };
+
   // --- Zoom ---
   const setCenteredZoom = useCallback((newZoom: number) => {
      const viewDur = window.innerWidth / zoom;
@@ -719,6 +797,31 @@ function App() {
             </div>
         )}
 
+        {/* Note Inspector (Floating) */}
+        {selectedNoteId && selectedNote && (
+            <div className="absolute top-2 right-4 z-20 bg-white shadow-md border rounded-md p-2 flex items-center gap-2 text-sm">
+                <span className="font-semibold text-gray-500 text-xs uppercase">Note Pitch</span>
+                <input 
+                    type="number" 
+                    step="0.01"
+                    className="w-20 border rounded px-1 py-0.5 text-right font-mono"
+                    value={pitchInputValue}
+                    onChange={(e) => setPitchInputValue(e.target.value)}
+                    onBlur={handlePitchInputCommit}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget.blur())}
+                />
+                <span className="text-gray-500">Hz</span>
+                <div className="w-px h-4 bg-gray-300 mx-1"></div>
+                <button 
+                    onClick={() => { setSelectedNoteId(null); setSelectionRange(null); setIsLooping(false); }}
+                    className="p-1 hover:bg-gray-100 text-gray-400 rounded"
+                    title="Close"
+                >
+                    <X size={14} />
+                </button>
+            </div>
+        )}
+
         <PitchVisualizer 
           pitchData={analysis.pitchData} notes={analysis.notes}
           spectrogramData={spectrogramData} showSpectrogram={showSpectrogram}
@@ -729,6 +832,11 @@ function App() {
           showCandidates={showCandidates} frameDuration={audioBuffer ? YIN_HOP_SIZE / audioBuffer.sampleRate : 0}
           onViewScroll={setViewStartTime} onSeek={handleSeek} onZoomWheel={handleZoomWheel}
           onSelectionChange={handleSelectionChange} onNoteResize={handleNoteResize}
+          // New Props
+          selectedNoteId={selectedNoteId}
+          onNoteSelect={handleNoteSelect}
+          onNotePitchChange={handleNotePitchChange}
+          onPitchDragEnd={handlePitchDragEnd}
         />
         
         {!fileName && (

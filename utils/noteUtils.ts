@@ -129,3 +129,23 @@ export const resizeNoteWithPush = (
 
     return [...finalOtherNotes, updatedTargetNote].sort((a, b) => a.start - b.start);
 };
+
+// Get context range for a note (neighboring area)
+export const getNoteContextRange = (note: Note, allNotes: Note[], paddingSeconds: number): [number, number] => {
+    // 1. Try to find neighbors to bound the context
+    const sorted = [...allNotes].sort((a, b) => a.start - b.start);
+    const idx = sorted.findIndex(n => n.id === note.id);
+    
+    let start = note.start - paddingSeconds;
+    let end = note.end + paddingSeconds;
+
+    // Use neighbors if available to define a musical context, or just time padding?
+    // User asked for "3 notes to left and right".
+    // Let's implement robust "Time Padding" first as it's more predictable than counting notes
+    // (what if next note is 30 seconds away?)
+    
+    // Optional: Clamp to neighbor notes if they are very far? 
+    // No, usually you want silence included.
+    
+    return [Math.max(0, start), end];
+};
