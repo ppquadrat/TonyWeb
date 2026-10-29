@@ -804,6 +804,7 @@ function App() {
     const layer = createLayer(analysis.segmentLayers);
     commitHistory({ ...analysis, segmentLayers: [...analysis.segmentLayers, layer] });
     setActiveLayerId(layer.id);
+    return layer.id;
   }, [analysis, commitHistory]);
 
   // A segment being drawn or resized shows as the time selection in the pitch view

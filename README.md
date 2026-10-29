@@ -65,7 +65,7 @@ The light blue blocks represent discrete notes.
 ### 5. Segment Layers (Lyrics, Speakers, ...)
 Segment layers hold labelled time intervals that are independent of the pitch and notes, for example syllables of the lyrics or who is speaking. They appear as lanes under the pitch view and share its time axis. Segments within a layer never overlap.
 
-*   **Add a layer:** Click `+ Segment layer` under the pitch view. Double-click a layer's name to rename it.
+*   **Add a layer:** Click `+ Segment layer` under the pitch view. Name it as soon as it appears; click a layer's name later to rename it.
 *   **Create a segment:** Drag in empty space in a layer, or select a time range in the pitch view and press `Enter` (the segment goes into the active, highlighted layer). New segments stop at their neighbours.
 *   **Label:** Type straight away after creating a segment, or double-click a segment. `Enter` saves, `Tab` / `Shift + Tab` save and move to the next / previous segment, `Esc` cancels. Labels already used in the layer are suggested.
 *   **Listen:** Clicking a segment selects its time range, so `Space` loops it.

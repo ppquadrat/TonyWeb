@@ -136,6 +136,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault(); 
+    // preventDefault keeps focus where it was, so commit any open text field (e.g. a layer name)
+    if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
     
     const { time: rawTime, y: mouseY } = getMouseInfo(e.clientX, e.clientY);
     dragStartRef.current = rawTime;

@@ -23,7 +23,15 @@ test('create, label and delete segments in a layer', async ({ page }, testInfo) 
 
   await page.getByRole('button', { name: 'Segment layer' }).click();
   await expect(page.getByTestId('segment-lane')).toHaveCount(1);
+  // A new layer opens with its name ready to type over
+  await page.keyboard.type('Lyrics');
+  await page.keyboard.press('Enter');
   await expect(page.getByTestId('segment-lane').first()).toHaveAttribute('data-layer-name', 'Lyrics');
+  // Clicking the name renames it
+  await page.getByTitle('Click to rename').click();
+  await page.keyboard.type('Syllables');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('segment-lane').first()).toHaveAttribute('data-layer-name', 'Syllables');
 
   const c = await laneCoords(page);
 

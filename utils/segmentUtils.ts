@@ -18,7 +18,7 @@ export const labelColor = (label: string) => {
 
 export const createLayer = (existing: SegmentLayer[], name?: string): SegmentLayer => ({
     id: crypto.randomUUID(),
-    name: name ?? (existing.length === 0 ? 'Lyrics' : `Layer ${existing.length + 1}`),
+    name: name ?? `Layer ${existing.length + 1}`,
     color: LAYER_COLORS[existing.length % LAYER_COLORS.length],
     colorByLabel: false,
     segments: [],

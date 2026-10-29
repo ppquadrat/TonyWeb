@@ -20,7 +20,7 @@ interface SegmentLanesProps {
   selectedSegment: SegmentRef | null;
   editingSegment: SegmentRef | null;
   onLayersChange: (layers: SegmentLayer[]) => void;
-  onAddLayer: () => void;
+  onAddLayer: () => string; // returns the new layer's id
   onSetActiveLayer: (layerId: string) => void;
   onSelectSegment: (ref: SegmentRef | null) => void;
   onEditSegment: (ref: SegmentRef | null) => void;
@@ -275,12 +275,14 @@ const SegmentLanes: React.FC<SegmentLanesProps> = ({
                   <input
                     autoFocus
                     defaultValue={layer.name}
-                    className="w-24 border rounded px-0.5 text-[10px]"
+                    placeholder="Layer name"
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="w-28 border border-blue-500 rounded px-0.5 text-[10px]"
                     onBlur={(e) => { replaceLayer({ ...layer, name: e.target.value.trim() || layer.name }); setRenamingLayerId(null); }}
                     onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenamingLayerId(null); }}
                   />
                 ) : (
-                  <span className="font-semibold cursor-text" title="Double-click to rename" onDoubleClick={() => setRenamingLayerId(layer.id)}>{layer.name}</span>
+                  <span className="font-semibold cursor-text hover:underline" title="Click to rename" onClick={() => setRenamingLayerId(layer.id)}>{layer.name}</span>
                 )}
                 <button
                   className={`p-0.5 rounded hover:bg-gray-200 ${layer.colorByLabel ? 'text-blue-600' : 'text-gray-400'}`}
@@ -307,7 +309,7 @@ const SegmentLanes: React.FC<SegmentLanesProps> = ({
       </div>
       <div className="flex items-center gap-2 px-2 h-7 text-xs text-gray-500">
         <button
-          onClick={onAddLayer}
+          onClick={() => setRenamingLayerId(onAddLayer())}
           className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-gray-200 text-gray-700"
           title="Add a segment layer (lyrics, speakers, ...)"
         >
