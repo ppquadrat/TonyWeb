@@ -16,6 +16,7 @@ import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
+import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
 import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead } from './utils/viewUtils';
 import { X } from 'lucide-react';
 
@@ -456,6 +457,21 @@ function App() {
   };
 
   const saveFileAs = useCallback(async (content: string, defaultName: string, type: string, ext: string, desc: string, forceNew = false) => {
+      // 0. Inside a claude.ai artifact preview, save through the viewer
+      const artifactDownloads = await getArtifactDownloads();
+      if (artifactDownloads) {
+          const filename = artifactFilename(defaultName);
+          try {
+              await artifactDownloads.save({ filename, data: new Blob([content]) });
+              if (filename !== defaultName && !filename.endsWith('.json')) {
+                  alert(`Saved as "${filename}". Remove the ".txt" ending to open it in other programs.`);
+              }
+          } catch (err: any) {
+              if (err?.code !== 'declined') alert(`Could not save the file (${err?.code ?? err}).`);
+          }
+          return;
+      }
+
       // 1. If we have a project handle and we are Saving (not Save As), overwrite it
       if (!forceNew && projectHandle && type === 'application/json' && 'showSaveFilePicker' in window) {
            try {
