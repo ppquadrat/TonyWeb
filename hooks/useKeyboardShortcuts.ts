@@ -12,6 +12,7 @@ interface KeyboardShortcutsProps {
   onRedo: () => void;
   onPitchCorrection: (dir: 'up' | 'down') => void;
   onSeek: (time: number) => void;
+  onFitView: () => void;
   currentTime: number;
 }
 
@@ -26,6 +27,7 @@ export const useKeyboardShortcuts = ({
   onRedo,
   onPitchCorrection,
   onSeek,
+  onFitView,
   currentTime
 }: KeyboardShortcutsProps) => {
 
@@ -95,6 +97,11 @@ export const useKeyboardShortcuts = ({
         }
         
         // Navigation
+        if (e.code === 'KeyF' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            e.preventDefault();
+            onFitView();
+            return;
+        }
         if (e.code === 'ArrowLeft') { 
             e.preventDefault(); 
             onSeek(currentTime - 0.1); 
@@ -118,6 +125,7 @@ export const useKeyboardShortcuts = ({
     onRedo, 
     onPitchCorrection, 
     onSeek, 
+    onFitView,
     currentTime
   ]);
 };

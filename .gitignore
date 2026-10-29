@@ -22,3 +22,7 @@ dist/
 # Environment
 .env
 .env.*
+
+# Test output
+test-results/
+playwright-report/
