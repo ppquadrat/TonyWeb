@@ -52,7 +52,7 @@ The light blue blocks represent discrete notes.
 
 *   **Create/Merge Note:** Select a region and press `=` (Equal Sign). This creates a new note based on the median pitch of the selection. If notes already exist there, it merges/replaces them.
 *   **Adjust Boundaries:** Simply hover over the left or right edge of a note (cursor changes to `<->`). Click and drag to resize.
-    *   *Smart Resize:* Dragging a boundary will automatically push neighboring notes to prevent overlaps.
+    *   *No overlaps:* Notes never overlap. A boundary shared by two touching notes moves both, and a boundary dragged into a neighbouring note joins it and then moves both. Hold `Alt` to move only this note's edge (it then stops at the neighbour, which lets you open a gap).
     *   *Snap:* Boundaries snap to the nearest audio frame and adjacent notes. Hold `Shift` to disable snapping.
 *   **Correct Note Pitch (Innovation):**
     1.  **Double-click** a note body. Once selected, grabbing anywhere except the outer edges moves the note, even for very short notes. This selects the note and automatically highlights a "musical context" region (neighboring notes).

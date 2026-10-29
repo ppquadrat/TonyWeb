@@ -653,10 +653,10 @@ function App() {
     }
   }, [currentTime, analysis, audioBuffer, commitHistory]);
 
-  const handleNoteResize = useCallback((id: string, start: number, end: number) => {
-    const newNotes = resizeNoteWithPush(analysis.notes, id, start, end, analysis.pitchData);
+  const handleNoteResize = useCallback((id: string, start: number, end: number, detach = false) => {
+    const newNotes = resizeNoteWithPush(analysis.notes, id, start, end, analysis.pitchData, duration, detach);
     commitHistory({ ...analysis, notes: newNotes });
-  }, [analysis, commitHistory]);
+  }, [analysis, commitHistory, duration]);
 
   // --- Note & Pitch Operations (Double Click Workflow) ---
   const handleNoteSelect = useCallback((noteId: string) => {
