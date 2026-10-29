@@ -25,6 +25,7 @@ interface SegmentLanesProps {
   onSelectSegment: (ref: SegmentRef | null) => void;
   onEditSegment: (ref: SegmentRef | null) => void;
   onSeek: (time: number) => void;
+  onPreviewSelection: (range: [number, number]) => void; // show a drag in progress as the time selection
   onViewScroll: (startTime: number) => void;
   onZoomWheel: (deltaPixels: number, mouseTime: number) => void;
 }
@@ -49,7 +50,7 @@ const SegmentLanes: React.FC<SegmentLanesProps> = ({
   layers, duration, zoom, viewStartTime, currentTime, snapTimes,
   activeLayerId, selectedSegment, editingSegment,
   onLayersChange, onAddLayer, onSetActiveLayer, onSelectSegment, onEditSegment,
-  onSeek, onViewScroll, onZoomWheel,
+  onSeek, onPreviewSelection, onViewScroll, onZoomWheel,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -127,10 +128,17 @@ const SegmentLanes: React.FC<SegmentLanesProps> = ({
     }
     if (drag.layerId !== layer.id) return;
     if (drag.mode === 'create') {
-      setDrag({ ...drag, current: snap(timeAt(e.clientX, lane), e.shiftKey) });
+      const current = snap(timeAt(e.clientX, lane), e.shiftKey);
+      setDrag({ ...drag, current });
+      if (Math.abs(e.clientX - drag.startX) >= 3) {
+        onPreviewSelection([Math.min(drag.anchor, current), Math.max(drag.anchor, current)]);
+      }
     } else {
       const time = snap(timeAt(e.clientX, lane), e.shiftKey, drag.segmentId);
-      setDrag({ ...drag, draft: moveSegmentBoundary(layer, drag.segmentId, drag.edge, time, duration, e.altKey) });
+      const draft = moveSegmentBoundary(layer, drag.segmentId, drag.edge, time, duration, e.altKey);
+      setDrag({ ...drag, draft });
+      const seg = draft.segments.find(s => s.id === drag.segmentId);
+      if (seg) onPreviewSelection([seg.start, seg.end]);
     }
   };
 

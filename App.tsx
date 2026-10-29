@@ -751,6 +751,13 @@ function App() {
     setActiveLayerId(layer.id);
   }, [analysis, commitHistory]);
 
+  // A segment being drawn or resized shows as the time selection in the pitch view
+  const handlePreviewSelection = useCallback((range: [number, number]) => {
+    setSelectedNoteId(null);
+    setSelectionRange(range);
+    setIsLooping(true);
+  }, []);
+
   // Selecting a segment selects its time range, so Space loops it (handy while transcribing)
   const handleSelectSegment = useCallback((ref: SegmentRef | null) => {
     setSelectedSegment(ref);
@@ -1033,6 +1040,7 @@ function App() {
         onSelectSegment={handleSelectSegment}
         onEditSegment={setEditingSegment}
         onSeek={handleSeek}
+        onPreviewSelection={handlePreviewSelection}
         onViewScroll={setViewStartTime}
         onZoomWheel={handleZoomWheel}
       />
