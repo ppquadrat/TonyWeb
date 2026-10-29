@@ -25,6 +25,20 @@ export const calculateMedianPitch = (frames: PitchFrame[]): number => {
   return freqs[mid];
 };
 
+// Starting pitch for a note drawn where there is no f0 (unvoiced or silent): the nearest
+// note's pitch, else the median f0 within a few seconds, else A3. The user then drags it.
+export const fallbackNotePitch = (notes: Note[], pitchData: PitchFrame[], start: number, end: number): number => {
+    let nearest: Note | null = null;
+    let best = Infinity;
+    for (const n of notes) {
+        const gap = n.end <= start ? start - n.end : n.start >= end ? n.start - end : 0;
+        if (gap < best) { best = gap; nearest = n; }
+    }
+    if (nearest) return nearest.pitch;
+    const around = calculateMedianPitch(pitchData.filter(f => f.timestamp >= start - 3 && f.timestamp <= end + 3));
+    return around > 0 ? around : 220;
+};
+
 // Split a note into two at a specific time
 export const splitNote = (
     note: Note, 

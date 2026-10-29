@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moveNoteBoundary, resizeNoteWithPush, placeNewNote } from '../../utils/noteUtils';
+import { moveNoteBoundary, resizeNoteWithPush, placeNewNote, fallbackNotePitch } from '../../utils/noteUtils';
 import { Note, PitchFrame } from '../../types';
 
 const note = (id: string, start: number, end: number, pitch = 220): Note => ({ id, start, end, pitch });
@@ -69,5 +69,14 @@ describe('placeNewNote', () => {
     const r = placeNewNote([note('a', 1, 2), note('b', 3, 4)], 0.5, 2.5);
     expect(r.range).toEqual([0.5, 2.5]);
     expect(r.kept.map(n => n.id)).toEqual(['b']);
+  });
+});
+
+describe('fallbackNotePitch', () => {
+  it('uses the nearest note, then nearby f0, then A3', () => {
+    expect(fallbackNotePitch([note('a', 0, 1, 300), note('b', 5, 6, 400)], [], 1.5, 2)).toBe(300);
+    const frames: PitchFrame[] = [{ timestamp: 3, frequency: 250, hasPitch: true } as PitchFrame];
+    expect(fallbackNotePitch([], frames, 1.5, 2)).toBe(250);
+    expect(fallbackNotePitch([], [], 1.5, 2)).toBe(220);
   });
 });

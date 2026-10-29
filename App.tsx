@@ -14,7 +14,7 @@ import { generateSegmentsCSV, generateTextGrid, generateSegmentSVL, parseTextGri
 import { addSegment, createLayer, deleteSegment, splitSegment } from './utils/segmentUtils';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange, placeNewNote } from './utils/noteUtils';
+import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange, placeNewNote, fallbackNotePitch } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
 import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
 import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor, loopRange } from './utils/viewUtils';
@@ -706,14 +706,10 @@ function App() {
     if (!range) return; // no room: the selection lies inside another note
     const [start, end] = range;
     const frames = analysis.pitchData.filter(f => f.timestamp >= start && f.timestamp <= end);
-    const pitch = calculateMedianPitch(frames);
-
-    if (pitch > 0) {
-        const newNote: Note = { id: crypto.randomUUID(), start, end, pitch, state: 'default' };
-        commitHistory({ ...analysis, notes: [...filteredNotes, newNote] });
-    } else if (filteredNotes.length !== analysis.notes.length) {
-        commitHistory({ ...analysis, notes: filteredNotes });
-    }
+    // Without f0 in the range the note still gets made, at a pitch taken from its surroundings
+    const pitch = calculateMedianPitch(frames) || fallbackNotePitch(filteredNotes, analysis.pitchData, start, end);
+    const newNote: Note = { id: crypto.randomUUID(), start, end, pitch, state: 'default' };
+    commitHistory({ ...analysis, notes: [...filteredNotes, newNote] });
   }, [selectionRange, analysis, commitHistory]);
 
   const handleDeleteNotes = useCallback(() => {
