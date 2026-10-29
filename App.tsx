@@ -634,7 +634,7 @@ function App() {
     if (!projectFile) { alert("Please select a project file (.tonyweb or .json)"); return; }
     const data = parseProjectJSON(await projectFile.text());
     if (!data) { alert("Invalid project file"); return; }
-    const audioFiles = files.filter(f => !isProject(f));
+    const audioFiles = files.filter(f => !isProject(f) && (f.type.startsWith('audio/') || /\.(wav|mp3|flac|ogg|oga|m4a|aac|aiff?|webm|opus)$/i.test(f.name)));
     const audioFile = audioFiles.find(f => f.name === data.fileName) ?? audioFiles[0];
     if (audioFile) openProjectWithAudio(data, audioFile);
     else if (audioBuffer && fileName === data.fileName) applyProjectData(data, audioBuffer);

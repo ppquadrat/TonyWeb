@@ -12,7 +12,7 @@ test('a project opens without asking for audio picked together with it', async (
   const project = testInfo.outputPath('song.tonyweb');
   writeProject(project);
   await page.goto('./');
-  await page.setInputFiles('input[accept=".json,.tonyweb,audio/*"]', [project, wav]);
+  await page.setInputFiles('[data-testid="project-input"]', [project, wav]);
   await expect(page.getByText('la', { exact: true })).toBeVisible();
   await expect(page.getByText('Locate Audio File')).toHaveCount(0);
 });
@@ -22,7 +22,7 @@ test('locating the audio for a project shows that it is loading', async ({ page 
   const project = testInfo.outputPath('song.tonyweb');
   writeProject(project);
   await page.goto('./');
-  await page.setInputFiles('input[accept=".json,.tonyweb,audio/*"]', project);
+  await page.setInputFiles('[data-testid="project-input"]', project);
   await expect(page.getByText('Locate Audio File')).toBeVisible();
   // Hold decoding so the loading state can be seen
   await page.evaluate(() => {

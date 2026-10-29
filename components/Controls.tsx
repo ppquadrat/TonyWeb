@@ -240,7 +240,9 @@ const Controls: React.FC<ControlsProps> = ({
             <input 
                 ref={projectInputRef}
                 type="file" 
-                accept=".json,.tonyweb,audio/*"
+                // No accept filter: mixing extensions with audio/* made some file dialogs grey out the
+                // project file on first open. The handler checks what was picked instead.
+                data-testid="project-input"
                 multiple
                 onChange={(e) => { if(e.target.files?.length) onLoadProject(Array.from(e.target.files)); e.target.value = ''; }} 
                 className="hidden" 
