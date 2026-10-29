@@ -134,6 +134,7 @@ const WaveformNavigator: React.FC<WaveformNavigatorProps> = ({
   return (
     <div 
       ref={containerRef} 
+      data-testid="minimap"
       className="relative w-full h-16 bg-white border-t border-gray-300 cursor-crosshair overflow-hidden group select-none"
       onMouseDown={handleMouseDown}
     >
@@ -147,6 +148,7 @@ const WaveformNavigator: React.FC<WaveformNavigatorProps> = ({
           width: `${widthPct}%` 
         }}
         onMouseDown={handleRectMouseDown}
+        data-testid="minimap-view"
         title="Drag to scroll view"
       />
 

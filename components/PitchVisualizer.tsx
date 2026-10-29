@@ -2,7 +2,8 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { PitchFrame, Note, SpectrogramData } from '../types';
 import { drawSpectrogram, drawGrid, drawNotes, drawPitchCurve, drawCandidates, drawSelection, freqToY, yToFreq, hzToNoteName } from '../utils/renderUtils';
-import { getSnappedTime, findNoteInteraction, InteractionMode } from '../utils/interactionUtils';
+import { getSnappedTime, findNoteInteraction, isOnNote, InteractionMode } from '../utils/interactionUtils';
+import { wheelDeltaToPixels } from '../utils/viewUtils';
 import { DIMENSIONS, COLORS } from '../constants';
 
 interface PitchVisualizerProps {
@@ -15,14 +16,13 @@ interface PitchVisualizerProps {
   currentTime: number;
   duration: number;
   zoom: number; // Pixels per second
-  containerHeight: number;
   viewStartTime: number;
   selectionRange: [number, number] | null;
   showCandidates: boolean;
   frameDuration: number; // New prop for grid snapping
   onViewScroll: (startTime: number) => void;
   onSeek: (time: number) => void;
-  onZoomWheel: (deltaY: number, mouseTime: number) => void;
+  onZoomWheel: (deltaPixels: number, mouseTime: number) => void;
   onSelectionChange: (range: [number, number] | null) => void;
   onNoteResize: (noteId: string, newStart: number, newEnd: number) => void;
   
@@ -43,7 +43,6 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   currentTime,
   duration,
   zoom,
-  containerHeight,
   viewStartTime,
   selectionRange,
   showCandidates,
@@ -60,12 +59,29 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  
-  // Flag to ignore scroll events triggered by our own zoom logic
-  const isProgrammaticScroll = useRef(false);
-  
-  // Derived width
-  const width = Math.max(window.innerWidth, duration * zoom + window.innerWidth);
+
+  // The canvas only covers the visible window (not the whole timeline), so it
+  // stays within browser canvas size limits (Firefox caps a canvas at 32767px).
+  const [size, setSize] = useState({ width: window.innerWidth, height: 400 });
+  const { width, height: containerHeight } = size;
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.max(1, Math.floor(el.clientWidth));
+      const h = Math.max(1, Math.floor(el.clientHeight));
+      setSize(prev => (prev.width === w && prev.height === h) ? prev : { width: w, height: h });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Cached spectrogram image for the current view; reused while dragging notes
+  // so a drag only redraws cheap vector layers.
+  const spectrogramCacheRef = useRef<{ canvas: HTMLCanvasElement, key: string, pitchData: PitchFrame[] | null } | null>(null);
 
   // Interaction State
   const [interactionMode, setInteractionMode] = useState<InteractionMode>('NONE');
@@ -89,63 +105,47 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   // Hover Info State
   const [hoveredNoteInfo, setHoveredNoteInfo] = useState<{ onset: number, pitch: number } | null>(null);
 
-  // Handle Scroll
-  const handleScroll = () => {
-    if (isProgrammaticScroll.current) return;
-    if (containerRef.current) {
-        const time = containerRef.current.scrollLeft / zoom;
-        onViewScroll(time);
-    }
-  };
+  // Wheel: native non-passive listener so preventDefault works (React's onWheel is passive).
+  // Vertical wheel zooms around the mouse; horizontal swipe or Shift+wheel pans.
+  const wheelPropsRef = useRef({ zoom, viewStartTime, duration, onZoomWheel, onViewScroll });
+  wheelPropsRef.current = { zoom, viewStartTime, duration, onZoomWheel, onViewScroll };
 
-  // Sync scroll position from external
-  useLayoutEffect(() => {
-    if (containerRef.current) {
-        const targetScroll = viewStartTime * zoom;
-        if (Math.abs(containerRef.current.scrollLeft - targetScroll) > 1) {
-            isProgrammaticScroll.current = true;
-            containerRef.current.scrollLeft = targetScroll;
-            setTimeout(() => { isProgrammaticScroll.current = false; }, 50);
-        }
-    }
-  }, [viewStartTime, zoom]);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    if (e.deltaY !== 0) {
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        const scrollLeft = containerRef.current.scrollLeft;
-        const mouseX = e.clientX - rect.left;
-        const mouseTime = (scrollLeft + mouseX) / zoom;
-        onZoomWheel(e.deltaY, mouseTime);
+      const { zoom, viewStartTime, onZoomWheel, onViewScroll } = wheelPropsRef.current;
+      const rect = el.getBoundingClientRect();
+      const dx = wheelDeltaToPixels(e.deltaX, e.deltaMode, rect.width);
+      const dy = wheelDeltaToPixels(e.deltaY, e.deltaMode, rect.height);
+      const panPixels = e.shiftKey ? (dx || dy) : dx;
+      if (Math.abs(panPixels) > Math.abs(e.shiftKey ? 0 : dy)) {
+        onViewScroll(viewStartTime + panPixels / zoom);
+      } else if (dy !== 0) {
+        const mouseTime = viewStartTime + (e.clientX - rect.left) / zoom;
+        onZoomWheel(dy, mouseTime);
       }
-    }
-  };
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const getMouseInfo = (clientX: number, clientY: number) => {
     if (!containerRef.current) return { time: 0, y: 0 };
     const rect = containerRef.current.getBoundingClientRect();
-    const scrollLeft = containerRef.current.scrollLeft;
     
     const x = clientX - rect.left;
     const y = clientY - rect.top;
     
-    const time = Math.max(0, Math.min(duration, (scrollLeft + x) / zoom));
+    const time = Math.max(0, Math.min(duration, viewStartTime + x / zoom));
     return { time, y };
   };
 
   // Handle Double Click to Select Note
   const handleDoubleClick = (e: React.MouseEvent) => {
     const { time, y } = getMouseInfo(e.clientX, e.clientY);
-    const NOTE_HEIGHT = DIMENSIONS.noteInteractionHeight; 
-
-    const note = notes.find(n => {
-        const nY = freqToY(n.pitch, containerHeight);
-        const inTime = time >= n.start && time <= n.end;
-        const inPitch = Math.abs(y - nY) < NOTE_HEIGHT;
-        return inTime && inPitch;
-    });
+    const note = notes.find(n => isOnNote(time, y, n, containerHeight));
     
     if (note) {
         // Trigger context selection logic in App
@@ -216,13 +216,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         
         if (showNotes) {
             // Re-use logic for finding hover targets, but simplified for display
-            const NOTE_HALF_HEIGHT = DIMENSIONS.noteInteractionHeight / 2;
-            const hoveredNote = notes.find(note => {
-                const noteY = freqToY(note.pitch, containerHeight);
-                const inTime = rawTime >= note.start && rawTime <= note.end;
-                const inPitch = Math.abs(mouseY - noteY) < NOTE_HALF_HEIGHT;
-                return inTime && inPitch;
-            });
+            const hoveredNote = notes.find(note => isOnNote(rawTime, mouseY, note, containerHeight));
             
             if (hoveredNote) {
                 foundHoverNote = { onset: hoveredNote.start, pitch: hoveredNote.pitch };
@@ -349,18 +343,42 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = width;
-    canvas.height = containerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    const pixelWidth = Math.round(width * dpr);
+    const pixelHeight = Math.round(containerHeight * dpr);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+    }
 
-    const visibleWidth = window.innerWidth;
+    const visibleWidth = width;
+    const originX = viewStartTime * zoom;
+
+    // Drawing functions work in timeline pixels (time * zoom); shift so the view start is at x = 0.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // 1. Clear & Background
     ctx.fillStyle = COLORS.background;
     ctx.fillRect(0, 0, width, containerHeight);
+    ctx.translate(-originX, 0);
 
-    // 2. Spectrogram
-    if (showSpectrogram) {
-        drawSpectrogram(ctx, spectrogramData, pitchData, viewStartTime, zoom, visibleWidth, containerHeight, duration, showPitch);
+    // 2. Spectrogram (cached per view)
+    if (showSpectrogram && spectrogramData) {
+        const key = [viewStartTime, zoom, visibleWidth, containerHeight, duration, showPitch].join('|');
+        let cache = spectrogramCacheRef.current;
+        if (!cache || cache.key !== key || cache.pitchData !== pitchData) {
+            const off = cache?.canvas ?? document.createElement('canvas');
+            off.width = Math.ceil(visibleWidth);
+            off.height = containerHeight;
+            const offCtx = off.getContext('2d');
+            if (offCtx) {
+                offCtx.clearRect(0, 0, off.width, off.height);
+                drawSpectrogram(offCtx, spectrogramData, pitchData, viewStartTime, zoom, visibleWidth, containerHeight, duration, showPitch);
+            }
+            cache = { canvas: off, key, pitchData };
+            spectrogramCacheRef.current = cache;
+        }
+        ctx.drawImage(cache.canvas, originX, 0);
     }
     
     // 3. Selection (Background highlight)
@@ -394,14 +412,14 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     
   }, [pitchData, notes, spectrogramData, showSpectrogram, width, zoom, containerHeight, selectionRange, showCandidates, viewStartTime, showPitch, showNotes, duration, draggedNoteState, selectedNoteId]);
 
+  const playheadX = (currentTime - viewStartTime) * zoom;
+
   return (
-    <div className="flex-1 relative overflow-hidden bg-white">
+    <div className="flex-1 relative overflow-hidden bg-white min-h-0">
         <div 
             ref={containerRef} 
-            className="w-full h-full overflow-hidden bg-white relative select-none"
-            style={{ height: containerHeight }}
-            onScroll={handleScroll}
-            onWheel={handleWheel}
+            className="absolute inset-0 overflow-hidden bg-white select-none"
+            data-testid="pitch-view"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -411,18 +429,15 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         <canvas 
             ref={canvasRef}
             className="block"
-            width={width}
-            height={containerHeight}
             style={{ width: width, height: containerHeight }}
         />
         
-        <div 
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none opacity-80"
-            style={{ 
-            left: `${currentTime * zoom}px`,
-            height: containerHeight 
-            }}
-        />
+        {playheadX >= 0 && playheadX <= width && (
+            <div 
+                className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10 pointer-events-none opacity-80"
+                style={{ left: `${playheadX}px` }}
+            />
+        )}
         </div>
 
         {/* Hover Info Overlay - Now positioned relative to the Viewport Wrapper */}

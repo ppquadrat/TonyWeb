@@ -13,6 +13,7 @@ import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead } from './utils/viewUtils';
 import { X } from 'lucide-react';
 
 function App() {
@@ -100,6 +101,15 @@ function App() {
     };
   }, [isPlaying, isLooping, selectionRange, duration, audioBuffer, analysis, viewportWidth, zoom, currentTime, fileName, playbackSpeed, viewStartTime]);
 
+  // Keep zoom and view inside the audio whatever changed them (wheel, minimap, resize, load).
+  useLayoutEffect(() => {
+    if (duration <= 0) return;
+    const z = clampZoom(zoom, viewportWidth, duration);
+    if (z !== zoom) { setZoom(z); return; }
+    const v = clampViewStart(viewStartTime, zoom, viewportWidth, duration);
+    if (v !== viewStartTime) setViewStartTime(v);
+  }, [zoom, viewStartTime, viewportWidth, duration]);
+
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', handleResize);
@@ -141,9 +151,8 @@ function App() {
         } catch(e) { console.error("Loop restart failed", e); }
         
         setCurrentTime(state.selectionRange[0]);
-        // Center view on loop start
-        const viewDuration = state.viewportWidth / state.zoom;
-        setViewStartTime(Math.max(0, state.selectionRange[0] - viewDuration / 2));
+        // Keep loop start in view without jumping when it is already visible
+        setViewStartTime(followPlayhead(state.selectionRange[0], state.viewStartTime, state.zoom, state.viewportWidth));
         
         animationFrameRef.current = requestAnimationFrame(updateLoop);
         return;
@@ -157,9 +166,12 @@ function App() {
       setCurrentTime(state.isLooping && !state.selectionRange ? 0 : state.duration);
     } else {
       setCurrentTime(time);
-      // Continuous View Centering
-      const viewDuration = state.viewportWidth / state.zoom;
-      setViewStartTime(Math.max(0, time - viewDuration / 2));
+      // Page-turn follow: move the view only when the playhead leaves it
+      const nextStart = followPlayhead(time, state.viewStartTime, state.zoom, state.viewportWidth);
+      if (nextStart !== state.viewStartTime) {
+        state.viewStartTime = clampViewStart(nextStart, state.zoom, state.viewportWidth, state.duration);
+        setViewStartTime(state.viewStartTime);
+      }
       animationFrameRef.current = requestAnimationFrame(updateLoop);
     }
   }, []);
@@ -280,9 +292,8 @@ function App() {
          playDuration = state.duration - startTime;
       }
 
-      // Jump view to center cursor
-      const viewDuration = state.viewportWidth / state.zoom;
-      setViewStartTime(Math.max(0, startTime - viewDuration / 2));
+      // Bring the start point into view (no jump if it is already visible)
+      setViewStartTime(followPlayhead(startTime, state.viewStartTime, state.zoom, state.viewportWidth));
 
       audioService.play(
           state.audioBuffer, 
@@ -697,21 +708,27 @@ function App() {
   };
 
   // --- Zoom ---
-  const setCenteredZoom = useCallback((newZoom: number) => {
-     const viewDur = window.innerWidth / zoom;
+  const setCenteredZoom = useCallback((requestedZoom: number) => {
+     const newZoom = clampZoom(requestedZoom, viewportWidth, duration);
+     const viewDur = viewportWidth / zoom;
      const center = viewStartTime + viewDur / 2;
-     const newDur = window.innerWidth / newZoom;
+     const newDur = viewportWidth / newZoom;
      setZoom(newZoom);
-     setViewStartTime(Math.max(0, center - newDur / 2));
-  }, [zoom, viewStartTime]);
+     setViewStartTime(clampViewStart(center - newDur / 2, newZoom, viewportWidth, duration));
+  }, [zoom, viewStartTime, viewportWidth, duration]);
 
-  const handleZoomWheel = useCallback((dY: number, mTime: number) => {
-    const factor = dY > 0 ? 0.8 : 1.25;
-    const newZoom = Math.max(10, Math.min(1000, zoom * factor));
+  const handleZoomWheel = useCallback((deltaPixels: number, mTime: number) => {
+    const newZoom = clampZoom(zoom * wheelZoomFactor(deltaPixels), viewportWidth, duration);
     const ratio = zoom / newZoom;
-    setViewStartTime(Math.max(0, mTime - (mTime - viewStartTime) * ratio));
+    setViewStartTime(clampViewStart(mTime - (mTime - viewStartTime) * ratio, newZoom, viewportWidth, duration));
     setZoom(newZoom);
-  }, [zoom, viewStartTime]);
+  }, [zoom, viewStartTime, viewportWidth, duration]);
+
+  // Show the whole file
+  const handleFitView = useCallback(() => {
+    setZoom(getMinZoom(viewportWidth, duration));
+    setViewStartTime(0);
+  }, [viewportWidth, duration]);
 
   // --- Initialize Keyboard Shortcuts ---
   useKeyboardShortcuts({
@@ -725,6 +742,7 @@ function App() {
     onRedo: redo,
     onPitchCorrection: handlePitchCorrection,
     onSeek: handleSeek,
+    onFitView: handleFitView,
     currentTime: currentTime
   });
 
@@ -734,8 +752,9 @@ function App() {
         isPlaying={isPlaying} isLooping={isLooping}
         onPlayPause={handlePlayPause} onStop={handleStop} onRewind={handleRewind}
         onToggleLoop={() => setIsLooping(!isLooping)}
-        onZoomIn={() => setCenteredZoom(Math.min(zoom * 1.5, 1000))}
-        onZoomOut={() => setCenteredZoom(Math.max(zoom / 1.5, 10))}
+        onZoomIn={() => setCenteredZoom(zoom * 1.5)}
+        onZoomOut={() => setCenteredZoom(zoom / 1.5)}
+        onZoomFit={handleFitView}
         onFileLoad={handleFileSelect} onExtractPitch={handleExtractPitch}
         onSaveProject={handleSaveProject} onSaveAsProject={handleSaveAsProject} onLoadProject={handleLoadProject}
         onExportPitchCSV={handleExportPitchCSV} onExportNotesCSV={handleExportNotesCSV} onExportSVL={handleExportSVL}
@@ -827,7 +846,6 @@ function App() {
           spectrogramData={spectrogramData} showSpectrogram={showSpectrogram}
           showPitch={showPitch} showNotes={showNotes}
           currentTime={currentTime} duration={duration} zoom={zoom}
-          containerHeight={window.innerHeight - 64 - 64 - 56} 
           viewStartTime={viewStartTime} selectionRange={selectionRange}
           showCandidates={showCandidates} frameDuration={audioBuffer ? YIN_HOP_SIZE / audioBuffer.sampleRate : 0}
           onViewScroll={setViewStartTime} onSeek={handleSeek} onZoomWheel={handleZoomWheel}

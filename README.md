@@ -27,9 +27,10 @@ This project is a web implementation inspired by the original **Tony** software 
 *   **Load Audio:** Click `File > Open Audio` (or the folder icon).
     *   *Recommendation:* Use Google Chrome or Edge for the best experience (File System Access API support).
 *   **Navigation:**
-    *   **Zoom:** Mouse Wheel.
-    *   **Scroll:** Drag the "Minimap" at the bottom or hold Shift + Scroll.
-    *   **Playback:** Press `Space` to play/pause.
+    *   **Zoom:** Mouse Wheel (zooms around the mouse pointer). You can't zoom out further than the whole file.
+    *   **Scroll:** Drag the "Minimap" at the bottom, swipe sideways on a trackpad, or hold Shift + Scroll. The view always stays on the audio.
+    *   **Fit:** Press `F` or click the Fit icon (top right) to show the whole file.
+    *   **Playback:** Press `Space` to play/pause. The view turns the page when the playhead reaches the edge.
 
 ### 2. Pitch Analysis (f0)
 The black curve represents the fundamental frequency.
@@ -54,7 +55,7 @@ The light blue blocks represent discrete notes.
     *   *Smart Resize:* Dragging a boundary will automatically push neighboring notes to prevent overlaps.
     *   *Snap:* Boundaries snap to the nearest audio frame and adjacent notes. Hold `Shift` to disable snapping.
 *   **Correct Note Pitch (Innovation):**
-    1.  **Double-click** a note body. This selects the note and automatically highlights a "musical context" region (neighboring notes).
+    1.  **Double-click** a note body. Once selected, grabbing anywhere except the outer edges moves the note, even for very short notes. This selects the note and automatically highlights a "musical context" region (neighboring notes).
     2.  **Drag** the note body up or down to adjust its pitch.
     3.  **Release** the mouse to automatically hear the note played back within its context for auditory verification.
 *   **Split Note:** Place the red playback cursor where you want to cut, then press `/` (Forward Slash) or click the Scissors icon.
@@ -75,6 +76,7 @@ The light blue blocks represent discrete notes.
 | **Pick Pitch Below** | `Cmd + Down` |
 | **Save Project** | `Cmd + S` / `Ctrl + S` |
 | **Nudge Cursor** | `Left` / `Right` Arrow |
+| **Fit Whole File** | `F` |
 
 ---
 
@@ -103,4 +105,16 @@ npm install
 **Run Locally:**
 ```bash
 npm run dev
+```
+
+**Tests:**
+```bash
+npm test               # unit tests (Vitest)
+npx playwright install chromium firefox   # once
+npm run test:e2e       # browser tests in Chromium and Firefox (Playwright)
+```
+
+**Deploy to GitHub Pages:**
+```bash
+npm run deploy
 ```

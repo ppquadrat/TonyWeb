@@ -129,7 +129,8 @@ export const drawSpectrogram = (
              }
          }
     }
-    ctx.putImageData(imageData, viewStartTime * zoom, DIMENSIONS.rulerHeight);
+    // Drawn at the origin of the target canvas, which covers exactly the visible window
+    ctx.putImageData(imageData, 0, DIMENSIONS.rulerHeight);
 };
 
 export const drawGrid = (
