@@ -35,6 +35,18 @@ export const wheelZoomFactor = (deltaPixels: number) => {
     return Math.exp(-clamped * 0.002);
 };
 
+// When the cursor is moved by hand (click, arrow keys, note selection) and lands near the
+// right edge or outside the view, scroll so it sits a third of the way in. Clicks elsewhere
+// leave the view alone.
+export const REVEAL_RIGHT_EDGE = 0.85;
+export const revealCursor = (time: number, viewStart: number, zoom: number, viewportWidth: number) => {
+    const viewDuration = viewportWidth / zoom;
+    if (time < viewStart || time > viewStart + viewDuration * REVEAL_RIGHT_EDGE) {
+        return time - viewDuration * 0.3;
+    }
+    return viewStart;
+};
+
 // Move the view only when the playhead leaves it ("page turn" follow).
 export const followPlayhead = (time: number, viewStart: number, zoom: number, viewportWidth: number) => {
     const viewDuration = viewportWidth / zoom;

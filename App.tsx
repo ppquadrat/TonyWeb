@@ -17,7 +17,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
 import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
-import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead } from './utils/viewUtils';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor } from './utils/viewUtils';
 import { X, Loader2 } from 'lucide-react';
 
 function App() {
@@ -119,6 +119,38 @@ function App() {
     const v = clampViewStart(viewStartTime, zoom, viewportWidth, duration);
     if (v !== viewStartTime) setViewStartTime(v);
   }, [zoom, viewStartTime, viewportWidth, duration]);
+
+  // Follow the cursor when it is moved by hand near the right edge or off screen.
+  // While a button is held (dragging a selection, note or the minimap) wait for the release,
+  // so the view never moves under the pointer.
+  const pointerDownRef = useRef(false);
+  const revealPendingRef = useRef(false);
+  const revealCursorNow = useCallback(() => {
+    const s = stateRef.current;
+    if (s.isPlaying || s.duration <= 0) return;
+    const next = clampViewStart(revealCursor(s.currentTime, s.viewStartTime, s.zoom, s.viewportWidth), s.zoom, s.viewportWidth, s.duration);
+    if (next !== s.viewStartTime) setViewStartTime(next);
+  }, []);
+  useEffect(() => {
+    if (isPlaying) return;
+    if (pointerDownRef.current) revealPendingRef.current = true;
+    else revealCursorNow();
+  }, [currentTime, isPlaying, revealCursorNow]);
+  useEffect(() => {
+    const down = () => { pointerDownRef.current = true; revealPendingRef.current = false; };
+    const up = () => {
+      pointerDownRef.current = false;
+      if (revealPendingRef.current) { revealPendingRef.current = false; revealCursorNow(); }
+    };
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    return () => {
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+    };
+  }, [revealCursorNow]);
 
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth);

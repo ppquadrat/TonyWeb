@@ -31,6 +31,7 @@ This project is a web implementation inspired by the original **Tony** software 
     *   **Scroll:** Drag the "Minimap" at the bottom, swipe sideways on a trackpad, or hold Shift + Scroll. The view always stays on the audio.
     *   **Fit:** Press `F` or click the Fit icon (top right) to show the whole file.
     *   **Playback:** Press `Space` to play/pause. The view turns the page when the playhead reaches the edge.
+    *   **Cursor follow:** When you click or use the arrow keys near the right edge (or off screen), the view scrolls so the cursor sits a third of the way in. Clicks elsewhere leave the view alone.
 
 ### 2. Pitch Analysis (f0)
 The black curve represents the fundamental frequency.

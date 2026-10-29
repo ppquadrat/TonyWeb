@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, wheelDeltaToPixels, followPlayhead } from '../../utils/viewUtils';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, wheelDeltaToPixels, followPlayhead, revealCursor } from '../../utils/viewUtils';
 
 describe('viewUtils', () => {
   it('keeps the view start inside the audio', () => {
@@ -38,5 +38,14 @@ describe('viewUtils', () => {
     expect(followPlayhead(5, 0, 100, 1000)).toBe(0);
     expect(followPlayhead(9.5, 0, 100, 1000)).toBeCloseTo(8.5);
     expect(followPlayhead(2, 4, 100, 1000)).toBeCloseTo(1);
+  });
+
+  it('scrolls to a hand-moved cursor only near the right edge or off screen', () => {
+    // 10s visible from 0
+    expect(revealCursor(5, 0, 100, 1000)).toBe(0);
+    expect(revealCursor(8, 0, 100, 1000)).toBe(0);
+    expect(revealCursor(9, 0, 100, 1000)).toBeCloseTo(6);
+    expect(revealCursor(14, 0, 100, 1000)).toBeCloseTo(11);
+    expect(revealCursor(2, 4, 100, 1000)).toBeCloseTo(-1);
   });
 });

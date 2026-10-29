@@ -144,8 +144,9 @@ const WaveformNavigator: React.FC<WaveformNavigatorProps> = ({
       <div 
         className="absolute top-0 bottom-0 border-2 border-black bg-black/10 hover:bg-black/20 cursor-grab active:cursor-grabbing z-20 transition-colors"
         style={{ 
-          left: `${leftPct}%`, 
-          width: `${widthPct}%` 
+          // At least 12px wide so it can still be grabbed when zoomed far in
+          left: `clamp(0px, calc(${leftPct + widthPct / 2}% - max(6px, ${widthPct / 2}%)), calc(100% - max(12px, ${widthPct}%)))`,
+          width: `max(12px, ${widthPct}%)`
         }}
         onMouseDown={handleRectMouseDown}
         data-testid="minimap-view"

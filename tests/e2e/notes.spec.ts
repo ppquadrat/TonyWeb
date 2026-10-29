@@ -74,3 +74,26 @@ test('the view cannot be scrolled or zoomed away from the audio', async ({ page 
   expect(Math.abs(view.x - track.x)).toBeLessThan(3);
   expect(Math.abs(view.width - track.width)).toBeLessThan(3);
 });
+
+test('the view follows the cursor moved near the right edge, but not on other clicks', async ({ page }, testInfo) => {
+  const wav = writeToneWav(testInfo, [[220, 20]]);
+  await loadAudio(page, wav);
+  const box = await viewGeometry(page);
+  await page.mouse.move(box.x + 5, box.y + box.height / 2);
+  for (let i = 0; i < 15; i++) await page.mouse.wheel(0, -100);
+  const viewX = async () => (await page.getByTestId('minimap-view').boundingBox())!.x;
+  const start = await viewX();
+
+  // A click in the middle leaves the view alone
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height - 10);
+  expect(await viewX()).toBeCloseTo(start, 0);
+
+  // A click near the right edge brings the cursor back into the view
+  await page.mouse.click(box.x + box.width * 0.95, box.y + box.height - 10);
+  await expect.poll(viewX).toBeGreaterThan(start + 2);
+
+  // Arrow keys past the right edge keep it in view
+  const after = await viewX();
+  for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
+  await expect.poll(viewX).toBeGreaterThan(after);
+});
