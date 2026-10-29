@@ -87,15 +87,18 @@ export const splitSegment = (layer: SegmentLayer, segmentId: string, time: numbe
 };
 
 /**
- * Move one boundary of a segment. A boundary shared with a touching neighbour moves
- * both segments together (like a Praat tier boundary); otherwise it stops at the neighbour.
+ * Move one boundary of a segment, the same way as note boundaries: a boundary shared
+ * with a touching neighbour moves both segments (like a Praat tier boundary), a free
+ * boundary that reaches the neighbour joins it, and segments never overlap.
+ * With `detach` (Alt held) only this segment moves, and it stops at the neighbour.
  */
 export const moveSegmentBoundary = (
     layer: SegmentLayer,
     segmentId: string,
     edge: 'start' | 'end',
     time: number,
-    duration: number
+    duration: number,
+    detach = false
 ): SegmentLayer => {
     const segments = sortSegments(layer.segments);
     const i = segments.findIndex(s => s.id === segmentId);
@@ -105,18 +108,18 @@ export const moveSegmentBoundary = (
 
     if (edge === 'start') {
         const prev = segments[i - 1];
-        const shared = prev && Math.abs(prev.end - seg.start) < EPSILON;
-        const lower = prev ? (shared ? prev.start + MIN_SEGMENT_DURATION : prev.end) : 0;
+        const shared = !!prev && Math.abs(prev.end - seg.start) < EPSILON;
+        const lower = !prev ? 0 : detach ? prev.end : prev.start + MIN_SEGMENT_DURATION;
         const t = Math.max(lower, Math.min(seg.end - MIN_SEGMENT_DURATION, time));
         next[i] = { ...seg, start: t };
-        if (shared) next[i - 1] = { ...prev, end: t };
+        if (prev && !detach && (shared || t < prev.end)) next[i - 1] = { ...prev, end: t };
     } else {
         const after = segments[i + 1];
-        const shared = after && Math.abs(after.start - seg.end) < EPSILON;
-        const upper = after ? (shared ? after.end - MIN_SEGMENT_DURATION : after.start) : duration;
+        const shared = !!after && Math.abs(after.start - seg.end) < EPSILON;
+        const upper = !after ? duration : detach ? after.start : after.end - MIN_SEGMENT_DURATION;
         const t = Math.min(upper, Math.max(seg.start + MIN_SEGMENT_DURATION, time));
         next[i] = { ...seg, end: t };
-        if (shared) next[i + 1] = { ...after, start: t };
+        if (after && !detach && (shared || t > after.start)) next[i + 1] = { ...after, start: t };
     }
     return { ...layer, segments: next };
 };

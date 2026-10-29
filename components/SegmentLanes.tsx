@@ -130,7 +130,7 @@ const SegmentLanes: React.FC<SegmentLanesProps> = ({
       setDrag({ ...drag, current: snap(timeAt(e.clientX, lane), e.shiftKey) });
     } else {
       const time = snap(timeAt(e.clientX, lane), e.shiftKey, drag.segmentId);
-      setDrag({ ...drag, draft: moveSegmentBoundary(layer, drag.segmentId, drag.edge, time, duration) });
+      setDrag({ ...drag, draft: moveSegmentBoundary(layer, drag.segmentId, drag.edge, time, duration, e.altKey) });
     }
   };
 

@@ -38,10 +38,19 @@ describe('segmentUtils', () => {
     expect(moved.segments).toMatchObject([{ start: 0, end: 0.8 }, { start: 0.8, end: 2 }]);
   });
 
-  it('stops a free boundary at the neighbour', () => {
+  it('joins the neighbour when a free boundary reaches it, never overlapping', () => {
     const moved = moveSegmentBoundary(layerWith([0, 1], [1.5, 2]), 's1', 'start', 0.5, 10);
+    expect(moved.segments[1].start).toBe(0.5);
+    expect(moved.segments[0].end).toBe(0.5);
+  });
+
+  it('with detach (Alt) stops at the neighbour and leaves it alone', () => {
+    const moved = moveSegmentBoundary(layerWith([0, 1], [1.5, 2]), 's1', 'start', 0.5, 10, true);
     expect(moved.segments[1].start).toBe(1);
     expect(moved.segments[0].end).toBe(1);
+    const apart = moveSegmentBoundary(layerWith([0, 1], [1, 2]), 's1', 'start', 1.3, 10, true);
+    expect(apart.segments[0].end).toBe(1);
+    expect(apart.segments[1].start).toBe(1.3);
   });
 
   it('never inverts a segment while resizing', () => {
