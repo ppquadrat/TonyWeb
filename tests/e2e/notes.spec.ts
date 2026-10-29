@@ -96,6 +96,11 @@ test('the view follows the cursor moved near the right edge, but not on other cl
   const after = await viewX();
   for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
   await expect.poll(viewX).toBeGreaterThan(after);
+
+  // ...and going back left with the arrow keys follows too
+  const right = await viewX();
+  for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowLeft');
+  await expect.poll(viewX).toBeLessThan(right);
 });
 
 test('a click that jitters by a pixel or two does not make a looping selection', async ({ page }, testInfo) => {

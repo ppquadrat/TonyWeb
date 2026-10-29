@@ -46,7 +46,12 @@ describe('viewUtils', () => {
     expect(revealCursor(8, 0, 100, 1000)).toBe(0);
     expect(revealCursor(9, 0, 100, 1000)).toBeCloseTo(6);
     expect(revealCursor(14, 0, 100, 1000)).toBeCloseTo(11);
-    expect(revealCursor(2, 4, 100, 1000)).toBeCloseTo(-1);
+    // Near or past the left edge: two thirds of the way in, so there is room to keep going left
+    expect(revealCursor(20.5, 20, 100, 1000)).toBeCloseTo(13.5);
+    expect(revealCursor(15, 20, 100, 1000)).toBeCloseTo(8);
+    expect(revealCursor(21.5, 20, 100, 1000)).toBe(20);
+    // At the very start there is nothing to the left
+    expect(revealCursor(0.5, 0, 100, 1000)).toBe(0);
   });
 
   it('does not loop a selection too short to hear', () => {
