@@ -25,6 +25,10 @@ interface ControlsProps {
   onExportSVL: () => void;
   onImportPitch: (file: File) => void;
   onImportNotes: (file: File) => void;
+  onExportSegmentsCSV: () => void;
+  onExportTextGrid: () => void;
+  onExportSegmentSVL: () => void;
+  onImportSegments: (file: File) => void;
 
   isAnalyzing: boolean;
   isRecalculating?: boolean;
@@ -72,6 +76,10 @@ const Controls: React.FC<ControlsProps> = ({
   onExportSVL,
   onImportPitch,
   onImportNotes,
+  onExportSegmentsCSV,
+  onExportTextGrid,
+  onExportSegmentSVL,
+  onImportSegments,
   isAnalyzing,
   isRecalculating = false,
   hasData,
@@ -95,6 +103,7 @@ const Controls: React.FC<ControlsProps> = ({
   const projectInputRef = useRef<HTMLInputElement>(null);
   const importPitchRef = useRef<HTMLInputElement>(null);
   const importNotesRef = useRef<HTMLInputElement>(null);
+  const importSegmentsRef = useRef<HTMLInputElement>(null);
   
   const [showFileMenu, setShowFileMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -195,6 +204,15 @@ const Controls: React.FC<ControlsProps> = ({
                     <button onClick={() => { onExportSVL(); setShowFileMenu(false); }} disabled={!hasData} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 disabled:opacity-50">
                         <Activity size={14} /> Export SVL (Sonic Visualiser)
                     </button>
+                    <button onClick={() => { onExportSegmentsCSV(); setShowFileMenu(false); }} disabled={!hasData} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 disabled:opacity-50">
+                        <FileText size={14} /> Export Segments (CSV)
+                    </button>
+                    <button onClick={() => { onExportTextGrid(); setShowFileMenu(false); }} disabled={!hasData} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 disabled:opacity-50">
+                        <FileText size={14} /> Export Segments (Praat TextGrid)
+                    </button>
+                    <button onClick={() => { onExportSegmentSVL(); setShowFileMenu(false); }} disabled={!hasData} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 disabled:opacity-50">
+                        <Activity size={14} /> Export Active Segment Layer (SVL)
+                    </button>
 
                     <div className="border-t border-gray-100 my-1"></div>
                     <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">Import</div>
@@ -204,6 +222,9 @@ const Controls: React.FC<ControlsProps> = ({
                     </button>
                     <button onClick={() => { importNotesRef.current?.click(); setShowFileMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2">
                         <Download size={14} /> Import Notes (CSV)
+                    </button>
+                    <button onClick={() => { importSegmentsRef.current?.click(); setShowFileMenu(false); }} className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2">
+                        <Download size={14} /> Import Segments (TextGrid / CSV)
                     </button>
                 </div>
             )}
@@ -228,6 +249,13 @@ const Controls: React.FC<ControlsProps> = ({
                 type="file" 
                 accept=".csv" 
                 onChange={(e) => { if(e.target.files?.[0]) onImportPitch(e.target.files[0]); e.target.value = ''; }} 
+                className="hidden" 
+            />
+             <input 
+                ref={importSegmentsRef}
+                type="file" 
+                accept=".TextGrid,.textgrid,.csv,.txt" 
+                onChange={(e) => { if(e.target.files?.[0]) onImportSegments(e.target.files[0]); e.target.value = ''; }} 
                 className="hidden" 
             />
              <input 

@@ -20,6 +20,23 @@ export interface Note {
   state?: 'selected' | 'default'; // For future editing
 }
 
+// A labelled time interval, e.g. a syllable or a speaker turn
+export interface Segment {
+  id: string;
+  start: number;
+  end: number;
+  label: string;
+}
+
+// A layer of non-overlapping segments (one Praat interval tier)
+export interface SegmentLayer {
+  id: string;
+  name: string;
+  color: string;
+  colorByLabel: boolean; // e.g. one colour per speaker
+  segments: Segment[]; // sorted by start, never overlapping
+}
+
 export interface AudioState {
   buffer: AudioBuffer | null;
   fileName: string | null;
@@ -36,6 +53,7 @@ export interface AnalysisState {
 export interface HistoryState {
   pitchData: PitchFrame[];
   notes: Note[];
+  segmentLayers: SegmentLayer[];
 }
 
 export interface ViewState {

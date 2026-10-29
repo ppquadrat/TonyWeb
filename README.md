@@ -61,7 +61,22 @@ The light blue blocks represent discrete notes.
 *   **Split Note:** Place the red playback cursor where you want to cut, then press `/` (Forward Slash) or click the Scissors icon.
 *   **Delete Note:** Select a region containing notes and press `Backspace` or `Delete`.
 
-### 5. Shortcuts Cheat Sheet
+### 5. Segment Layers (Lyrics, Speakers, ...)
+Segment layers hold labelled time intervals that are independent of the pitch and notes, for example syllables of the lyrics or who is speaking. They appear as lanes under the pitch view and share its time axis. Segments within a layer never overlap.
+
+*   **Add a layer:** Click `+ Segment layer` under the pitch view. Double-click a layer's name to rename it.
+*   **Create a segment:** Drag in empty space in a layer, or select a time range in the pitch view and press `Enter` (the segment goes into the active, highlighted layer). New segments stop at their neighbours.
+*   **Label:** Type straight away after creating a segment, or double-click a segment. `Enter` saves, `Tab` / `Shift + Tab` save and move to the next / previous segment, `Esc` cancels. Labels already used in the layer are suggested.
+*   **Listen:** Clicking a segment selects its time range, so `Space` loops it.
+*   **Adjust boundaries:** Drag the inner edge of a segment. A boundary shared by two touching segments moves both. Boundaries snap to notes, other segments and the playhead; hold `Shift` to disable snapping.
+*   **Split / Delete:** With a segment selected, `/` splits it at the playhead and `Delete` removes it.
+*   **Colour by label:** The palette icon on a layer gives each distinct label its own colour (useful for speakers).
+*   **Export:** `File > Export Segments (CSV)` (all layers), `Export Segments (Praat TextGrid)` (one interval tier per layer), `Export Active Segment Layer (SVL)` (a Sonic Visualiser region layer).
+*   **Import:** `File > Import Segments` reads a Praat TextGrid (interval tiers) or a CSV.
+
+Segment layers are saved in the project file.
+
+### 6. Shortcuts Cheat Sheet
 
 | Action | Shortcut |
 | :--- | :--- |
@@ -69,14 +84,16 @@ The light blue blocks represent discrete notes.
 | **Undo** | `Cmd + Z` / `Ctrl + Z` |
 | **Redo** | `Cmd + Shift + Z` / `Ctrl + Y` |
 | **Create / Merge Note** | `=` |
-| **Split Note** | `/` |
-| **Delete Note** | `Backspace` / `Delete` |
+| **Split Note / Segment** | `/` |
+| **Delete Note / Segment** | `Backspace` / `Delete` |
 | **Show Candidates** | `Shift + C` |
 | **Pick Pitch Above** | `Cmd + Up` |
 | **Pick Pitch Below** | `Cmd + Down` |
 | **Save Project** | `Cmd + S` / `Ctrl + S` |
 | **Nudge Cursor** | `Left` / `Right` Arrow |
 | **Fit Whole File** | `F` |
+| **Selection to Segment / Edit Label** | `Enter` |
+| **Next / Previous Segment (while labelling)** | `Tab` / `Shift + Tab` |
 
 ---
 

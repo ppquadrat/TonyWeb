@@ -1,14 +1,17 @@
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
 import Controls from './components/Controls';
 import WaveformNavigator from './components/WaveformNavigator';
 import PitchVisualizer from './components/PitchVisualizer';
+import SegmentLanes, { SegmentRef } from './components/SegmentLanes';
 import Mixer from './components/Mixer';
 import { audioService } from './services/audioService';
 import { extractPitch, YIN_HOP_SIZE } from './services/yin';
 import { generateSpectrogram } from './services/spectrogram';
 import { generateProjectJSON, generatePitchCSV, generateNotesCSV, generateSVL, parseProjectJSON, parseCSV } from './services/exportService';
-import { MixerState, PitchFrame, Note, SpectrogramData } from './types';
+import { MixerState, PitchFrame, Note, SpectrogramData, SegmentLayer } from './types';
+import { generateSegmentsCSV, generateTextGrid, generateSegmentSVL, parseTextGrid, parseSegmentsCSV } from './services/segmentExport';
+import { addSegment, createLayer, deleteSegment, splitSegment } from './utils/segmentUtils';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
@@ -43,7 +46,12 @@ function App() {
     reset: resetHistory, 
     canUndo, 
     canRedo 
-  } = useUndoRedo<{pitchData: PitchFrame[], notes: Note[]}>({ pitchData: [], notes: [] });
+  } = useUndoRedo<{pitchData: PitchFrame[], notes: Note[], segmentLayers: SegmentLayer[]}>({ pitchData: [], notes: [], segmentLayers: [] });
+
+  // Segment layers (lyrics, speakers, ...): which lane receives new segments, and the selected / edited segment
+  const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
+  const [selectedSegment, setSelectedSegment] = useState<SegmentRef | null>(null);
+  const [editingSegment, setEditingSegment] = useState<SegmentRef | null>(null);
 
   // Separate loading state (not part of history)
   const [analysisStatus, setAnalysisStatus] = useState({ isAnalyzing: false, progress: 0 });
@@ -189,7 +197,7 @@ function App() {
 
   // --- Logic Handlers ---
 
-  const runPitchAnalysis = async (buffer: AudioBuffer) => {
+  const runPitchAnalysis = async (buffer: AudioBuffer, segmentLayers: SegmentLayer[] = []) => {
     setAnalysisStatus({ isAnalyzing: true, progress: 0 });
     try {
       const channelData = buffer.getChannelData(0);
@@ -197,7 +205,7 @@ function App() {
         setAnalysisStatus(prev => ({ ...prev, progress: p }));
       });
       setAnalysisStatus({ isAnalyzing: false, progress: 1 });
-      resetHistory({ pitchData: frames, notes: [] });
+      resetHistory({ pitchData: frames, notes: [], segmentLayers });
 
       // Trigger Spectrogram generation in background
       generateSpectrogram(buffer).then(data => {
@@ -238,7 +246,10 @@ function App() {
       const buffer = await loadAudio(file);
       if (buffer) {
           setAnalysisStatus({ isAnalyzing: false, progress: 0 });
-          resetHistory({ pitchData: [], notes: [] });
+          resetHistory({ pitchData: [], notes: [], segmentLayers: [] });
+          setActiveLayerId(null);
+          setSelectedSegment(null);
+          setEditingSegment(null);
           runPitchAnalysis(buffer);
       }
     }
@@ -273,6 +284,7 @@ function App() {
             setSelectedNoteId(null); // Clear selected note on click outside
         }
     }
+    setSelectedSegment(null);
   }, [audioBuffer]);
 
   // Helper to start playback using current state ref (avoids closure staleness)
@@ -392,7 +404,8 @@ function App() {
 
   const handleExtractPitch = async () => {
     if (!audioBuffer) return;
-    runPitchAnalysis(audioBuffer);
+    // Re-extracting pitch replaces notes but keeps segment layers
+    runPitchAnalysis(audioBuffer, analysis.segmentLayers);
   };
 
   // --- Recalculate Logic ---
@@ -425,7 +438,7 @@ function App() {
             .map(f => ({ ...f, timestamp: f.timestamp + offset }))
             .filter(f => f.timestamp >= start && f.timestamp <= end);
 
-        commitHistory({ pitchData: [...filtered, ...validNew].sort((a, b) => a.timestamp - b.timestamp), notes: analysis.notes });
+        commitHistory({ ...analysis, pitchData: [...filtered, ...validNew].sort((a, b) => a.timestamp - b.timestamp) });
         setShowCandidates(true);
     } catch (e) { console.error(e); } finally { setIsRecalculating(false); }
   };
@@ -488,7 +501,7 @@ function App() {
     try {
         const viewState = { zoom, viewStartTime, currentTime, selectionRange };
         const settings = { isLooping, playbackSpeed, showSpectrogram, showPitch, showNotes, mixerState };
-        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings);
+        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings, analysis.segmentLayers);
         const name = (fileName || "project").replace(/\.[^/.]+$/, "");
         await saveFileAs(json, `${name}.tonyweb`, 'application/json', '.tonyweb', 'Tony Web Project');
     } catch(e) { console.error(e); alert("Failed to save."); }
@@ -499,7 +512,7 @@ function App() {
     try {
         const viewState = { zoom, viewStartTime, currentTime, selectionRange };
         const settings = { isLooping, playbackSpeed, showSpectrogram, showPitch, showNotes, mixerState };
-        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings);
+        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings, analysis.segmentLayers);
         const name = (fileName || "project").replace(/\.[^/.]+$/, "");
         await saveFileAs(json, `${name}.tonyweb`, 'application/json', '.tonyweb', 'Tony Web Project', true);
     } catch(e) { console.error(e); alert("Failed to save."); }
@@ -529,7 +542,11 @@ function App() {
     const sr = buffer.sampleRate;
     const snappedPitch = data.pitchData.map((f: PitchFrame) => ({...f, timestamp: snapTime(f.timestamp, sr)}));
     const snappedNotes = data.notes.map((n: Note) => ({...n, start: snapTime(n.start, sr), end: snapTime(n.end, sr)}));
-    resetHistory({ pitchData: snappedPitch, notes: snappedNotes });
+    const segmentLayers: SegmentLayer[] = Array.isArray(data.segmentLayers) ? data.segmentLayers : [];
+    resetHistory({ pitchData: snappedPitch, notes: snappedNotes, segmentLayers });
+    setActiveLayerId(segmentLayers[0]?.id ?? null);
+    setSelectedSegment(null);
+    setEditingSegment(null);
     
     // Restore View State
     if (data.viewState) {
@@ -707,6 +724,118 @@ function App() {
     }
   };
 
+  // --- Segment Layers ---
+  const handleSegmentLayersChange = useCallback((segmentLayers: SegmentLayer[]) => {
+    commitHistory({ ...analysis, segmentLayers });
+  }, [analysis, commitHistory]);
+
+  const handleAddLayer = useCallback(() => {
+    const layer = createLayer(analysis.segmentLayers);
+    commitHistory({ ...analysis, segmentLayers: [...analysis.segmentLayers, layer] });
+    setActiveLayerId(layer.id);
+  }, [analysis, commitHistory]);
+
+  // Selecting a segment selects its time range, so Space loops it (handy while transcribing)
+  const handleSelectSegment = useCallback((ref: SegmentRef | null) => {
+    setSelectedSegment(ref);
+    if (!ref) return;
+    setActiveLayerId(ref.layerId);
+    const seg = analysis.segmentLayers.find(l => l.id === ref.layerId)?.segments.find(s => s.id === ref.segmentId);
+    if (seg) {
+        setSelectedNoteId(null);
+        setSelectionRange([seg.start, seg.end]);
+        setIsLooping(true);
+        if (!stateRef.current.isPlaying) setCurrentTime(seg.start);
+    }
+  }, [analysis.segmentLayers]);
+
+  const getSelectedSegment = () => {
+    if (!selectedSegment) return null;
+    const layer = analysis.segmentLayers.find(l => l.id === selectedSegment.layerId);
+    const segment = layer?.segments.find(s => s.id === selectedSegment.segmentId);
+    return layer && segment ? { layer, segment } : null;
+  };
+
+  // Enter: label the selected segment, or turn the time selection into a segment in the active layer
+  const handleSegmentEnter = useCallback(() => {
+    if (getSelectedSegment()) { setEditingSegment(selectedSegment); return; }
+    if (!selectionRange || !duration) return;
+    let layers = analysis.segmentLayers;
+    let layer = layers.find(l => l.id === activeLayerId) ?? layers[0];
+    if (!layer) {
+        layer = createLayer(layers);
+        layers = [...layers, layer];
+    }
+    const result = addSegment(layer, selectionRange[0], selectionRange[1], duration);
+    if (!result) return;
+    commitHistory({ ...analysis, segmentLayers: layers.map(l => l.id === layer!.id ? result.layer : l) });
+    const ref = { layerId: layer.id, segmentId: result.segment.id };
+    setActiveLayerId(layer.id);
+    setSelectedSegment(ref);
+    setEditingSegment(ref);
+  }, [selectedSegment, selectionRange, duration, analysis, activeLayerId, commitHistory]);
+
+  const handleDelete = useCallback(() => {
+    const sel = getSelectedSegment();
+    if (sel) {
+        commitHistory({ ...analysis, segmentLayers: analysis.segmentLayers.map(l => l.id === sel.layer.id ? deleteSegment(l, sel.segment.id) : l) });
+        setSelectedSegment(null);
+        return;
+    }
+    handleDeleteNotes();
+  }, [selectedSegment, analysis, commitHistory, handleDeleteNotes]);
+
+  const handleSplit = useCallback(() => {
+    const sel = getSelectedSegment();
+    if (sel && currentTime > sel.segment.start && currentTime < sel.segment.end) {
+        const layer = splitSegment(sel.layer, sel.segment.id, currentTime);
+        if (layer) commitHistory({ ...analysis, segmentLayers: analysis.segmentLayers.map(l => l.id === layer.id ? layer : l) });
+        return;
+    }
+    handleSplitNote();
+  }, [selectedSegment, currentTime, analysis, commitHistory, handleSplitNote]);
+
+  const handleExportSegmentsCSV = useCallback(async () => {
+    if (analysis.segmentLayers.length === 0) { alert("No segment layers to export."); return; }
+    const name = (fileName || "track").replace(/\.[^/.]+$/, "");
+    await saveFileAs(generateSegmentsCSV(analysis.segmentLayers), `${name}_segments.csv`, 'text/csv', '.csv', 'Segments CSV');
+  }, [analysis.segmentLayers, fileName, saveFileAs]);
+
+  const handleExportTextGrid = useCallback(async () => {
+    if (analysis.segmentLayers.length === 0) { alert("No segment layers to export."); return; }
+    const name = (fileName || "track").replace(/\.[^/.]+$/, "");
+    await saveFileAs(generateTextGrid(analysis.segmentLayers, duration), `${name}.TextGrid`, 'text/plain', '.TextGrid', 'Praat TextGrid');
+  }, [analysis.segmentLayers, duration, fileName, saveFileAs]);
+
+  const handleExportSegmentSVL = useCallback(async () => {
+    if (!audioBuffer) return;
+    const layer = analysis.segmentLayers.find(l => l.id === activeLayerId) ?? analysis.segmentLayers[0];
+    if (!layer) { alert("No segment layers to export."); return; }
+    const name = (fileName || "track").replace(/\.[^/.]+$/, "");
+    const layerName = layer.name.replace(/[^\w-]+/g, '_');
+    await saveFileAs(generateSegmentSVL(layer, audioBuffer.sampleRate), `${name}_${layerName}.svl`, 'text/xml', '.svl', 'Sonic Visualiser Layer');
+  }, [audioBuffer, analysis.segmentLayers, activeLayerId, fileName, saveFileAs]);
+
+  const handleImportSegments = useCallback(async (file: File) => {
+    const text = await file.text();
+    let imported: SegmentLayer[] = [];
+    try {
+        imported = /\.textgrid$/i.test(file.name) || text.includes('ooTextFile')
+            ? parseTextGrid(text)
+            : parseSegmentsCSV(text, file.name.replace(/\.[^/.]+$/, ""));
+    } catch (e) {
+        console.error(e);
+        alert("Could not read segments from this file.");
+        return;
+    }
+    if (imported.length === 0) { alert("No segments found in this file."); return; }
+    // Recolour so imported layers don't repeat the colours of existing ones
+    const all = [...analysis.segmentLayers];
+    imported.forEach(l => all.push({ ...createLayer(all, l.name), segments: l.segments }));
+    commitHistory({ ...analysis, segmentLayers: all });
+    setActiveLayerId(all[analysis.segmentLayers.length].id);
+  }, [analysis, commitHistory]);
+
   // --- Zoom ---
   const setCenteredZoom = useCallback((requestedZoom: number) => {
      const newZoom = clampZoom(requestedZoom, viewportWidth, duration);
@@ -733,9 +862,10 @@ function App() {
   // --- Initialize Keyboard Shortcuts ---
   useKeyboardShortcuts({
     onPlayPause: handlePlayPause,
-    onDeleteNotes: handleDeleteNotes,
+    onDeleteNotes: handleDelete,
     onCreateNote: handleCreateNote,
-    onSplitNote: handleSplitNote,
+    onSplitNote: handleSplit,
+    onSegmentEnter: handleSegmentEnter,
     onToggleCandidates: () => setShowCandidates(p => !p),
     onSaveProject: handleSaveProject,
     onUndo: undo,
@@ -745,6 +875,14 @@ function App() {
     onFitView: handleFitView,
     currentTime: currentTime
   });
+
+  // Segment boundaries snap to note boundaries and the time selection
+  const snapTimes = useMemo(() => {
+    const times: number[] = [];
+    analysis.notes.forEach(n => times.push(n.start, n.end));
+    if (selectionRange) times.push(selectionRange[0], selectionRange[1]);
+    return times;
+  }, [analysis.notes, selectionRange]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-white text-gray-900 font-sans overflow-hidden">
@@ -759,6 +897,8 @@ function App() {
         onSaveProject={handleSaveProject} onSaveAsProject={handleSaveAsProject} onLoadProject={handleLoadProject}
         onExportPitchCSV={handleExportPitchCSV} onExportNotesCSV={handleExportNotesCSV} onExportSVL={handleExportSVL}
         onImportPitch={handleImportPitch} onImportNotes={handleImportNotes}
+        onExportSegmentsCSV={handleExportSegmentsCSV} onExportTextGrid={handleExportTextGrid}
+        onExportSegmentSVL={handleExportSegmentSVL} onImportSegments={handleImportSegments}
         isAnalyzing={analysisStatus.isAnalyzing} isRecalculating={isRecalculating}
         hasData={analysis.pitchData.length > 0} fileName={fileName}
         selectionActive={selectionRange !== null} showCandidates={showCandidates}
@@ -863,6 +1003,23 @@ function App() {
             </div>
         )}
       </div>
+
+      <SegmentLanes
+        layers={analysis.segmentLayers}
+        duration={duration} zoom={zoom} viewStartTime={viewStartTime} currentTime={currentTime}
+        snapTimes={snapTimes}
+        activeLayerId={activeLayerId}
+        selectedSegment={selectedSegment}
+        editingSegment={editingSegment}
+        onLayersChange={handleSegmentLayersChange}
+        onAddLayer={handleAddLayer}
+        onSetActiveLayer={setActiveLayerId}
+        onSelectSegment={handleSelectSegment}
+        onEditSegment={setEditingSegment}
+        onSeek={handleSeek}
+        onViewScroll={setViewStartTime}
+        onZoomWheel={handleZoomWheel}
+      />
 
       <div className="flex-none shadow-sm z-10 relative">
         <WaveformNavigator 

@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { PitchFrame, Note, SpectrogramData } from '../types';
 import { drawSpectrogram, drawGrid, drawNotes, drawPitchCurve, drawCandidates, drawSelection, freqToY, yToFreq, hzToNoteName } from '../utils/renderUtils';
 import { getSnappedTime, findNoteInteraction, isOnNote, InteractionMode } from '../utils/interactionUtils';
-import { wheelDeltaToPixels } from '../utils/viewUtils';
+import { useTimelineWheel } from '../hooks/useTimelineWheel';
 import { DIMENSIONS, COLORS } from '../constants';
 
 interface PitchVisualizerProps {
@@ -105,31 +105,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   // Hover Info State
   const [hoveredNoteInfo, setHoveredNoteInfo] = useState<{ onset: number, pitch: number } | null>(null);
 
-  // Wheel: native non-passive listener so preventDefault works (React's onWheel is passive).
-  // Vertical wheel zooms around the mouse; horizontal swipe or Shift+wheel pans.
-  const wheelPropsRef = useRef({ zoom, viewStartTime, duration, onZoomWheel, onViewScroll });
-  wheelPropsRef.current = { zoom, viewStartTime, duration, onZoomWheel, onViewScroll };
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const { zoom, viewStartTime, onZoomWheel, onViewScroll } = wheelPropsRef.current;
-      const rect = el.getBoundingClientRect();
-      const dx = wheelDeltaToPixels(e.deltaX, e.deltaMode, rect.width);
-      const dy = wheelDeltaToPixels(e.deltaY, e.deltaMode, rect.height);
-      const panPixels = e.shiftKey ? (dx || dy) : dx;
-      if (Math.abs(panPixels) > Math.abs(e.shiftKey ? 0 : dy)) {
-        onViewScroll(viewStartTime + panPixels / zoom);
-      } else if (dy !== 0) {
-        const mouseTime = viewStartTime + (e.clientX - rect.left) / zoom;
-        onZoomWheel(dy, mouseTime);
-      }
-    };
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, []);
+  useTimelineWheel(containerRef, { zoom, viewStartTime, onZoomWheel, onViewScroll });
 
   const getMouseInfo = (clientX: number, clientY: number) => {
     if (!containerRef.current) return { time: 0, y: 0 };
