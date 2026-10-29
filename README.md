@@ -74,7 +74,7 @@ Segment layers hold labelled time intervals that are independent of the pitch an
 *   **Export:** `File > Export Segments (CSV)` (all layers), `Export Segments (Praat TextGrid)` (one interval tier per layer), `Export Active Segment Layer (SVL)` (a Sonic Visualiser region layer).
 *   **Import:** `File > Import Segments` reads a Praat TextGrid (interval tiers) or a CSV.
 
-Segment layers are saved in the project file.
+Segment layers are saved in the project file. The project stores the audio file name, not the audio: in **Load Project** select the project file and its audio together (browsers cannot read other files in the folder), or locate the audio when asked.
 
 ### 6. Shortcuts Cheat Sheet
 

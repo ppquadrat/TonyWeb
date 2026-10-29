@@ -19,7 +19,7 @@ interface ControlsProps {
   // File Operations
   onSaveProject: () => void;
   onSaveAsProject: () => void;
-  onLoadProject: (file: File) => void;
+  onLoadProject: (files: File[]) => void; // the project file, optionally with its audio
   onExportPitchCSV: () => void;
   onExportNotesCSV: () => void;
   onExportSVL: () => void;
@@ -240,8 +240,9 @@ const Controls: React.FC<ControlsProps> = ({
             <input 
                 ref={projectInputRef}
                 type="file" 
-                accept=".json,.tonyweb" 
-                onChange={(e) => { if(e.target.files?.[0]) onLoadProject(e.target.files[0]); e.target.value = ''; }} 
+                accept=".json,.tonyweb,audio/*"
+                multiple
+                onChange={(e) => { if(e.target.files?.length) onLoadProject(Array.from(e.target.files)); e.target.value = ''; }} 
                 className="hidden" 
             />
              <input 

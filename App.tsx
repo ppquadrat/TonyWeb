@@ -18,7 +18,7 @@ import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteC
 import { sliceAudioBuffer } from './utils/audioUtils';
 import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
 import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead } from './utils/viewUtils';
-import { X } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 
 function App() {
   // --- Audio & Playback State ---
@@ -87,6 +87,7 @@ function App() {
   const [saveFileNameInput, setSaveFileNameInput] = useState("");
   const [locateModalOpen, setLocateModalOpen] = useState(false);
   const [pendingProjectData, setPendingProjectData] = useState<any | null>(null);
+  const [locatingFile, setLocatingFile] = useState<string | null>(null); // audio being decoded for a project
   const [projectHandle, setProjectHandle] = useState<any | null>(null);
   
   const animationFrameRef = useRef<number | null>(null);
@@ -256,20 +257,29 @@ function App() {
     }
   }, [resetHistory]);
 
-  const handleLocateAudio = useCallback(async (file: File) => {
-     if (!file || !pendingProjectData) return;
-     const buffer = await loadAudio(file);
-     if (buffer) {
-         applyProjectData(pendingProjectData, buffer);
+  const openProjectWithAudio = async (data: any, file: File) => {
+     setPendingProjectData(data);
+     setLocateModalOpen(true);
+     setLocatingFile(file.name);
+     try {
+         const buffer = await loadAudio(file);
+         if (!buffer) return;
+         applyProjectData(data, buffer);
          setPendingProjectData(null);
          setLocateModalOpen(false);
-         
+
          // Trigger Spectrogram generation for located audio
          generateSpectrogram(buffer).then(data => {
              setSpectrogramData(data);
          }).catch(e => console.error("Spectrogram generation failed", e));
+     } finally {
+         setLocatingFile(null);
      }
-  }, [pendingProjectData]);
+  };
+
+  const handleLocateAudio = (file: File) => {
+     if (file && pendingProjectData && !locatingFile) openProjectWithAudio(pendingProjectData, file);
+  };
 
   const handleSelectionChange = useCallback((range: [number, number] | null) => {
     if (range && audioBuffer) {
@@ -584,10 +594,18 @@ function App() {
 
   }, [resetHistory]);
 
-  const handleLoadProject = async (file: File) => {
-    const data = parseProjectJSON(await file.text());
+  // Browsers can't read other files in the project's folder, so the audio can be picked
+  // together with the project; otherwise the user is asked to locate it.
+  const handleLoadProject = async (files: File[]) => {
+    const isProject = (f: File) => /\.(json|tonyweb)$/i.test(f.name);
+    const projectFile = files.find(isProject);
+    if (!projectFile) { alert("Please select a project file (.tonyweb or .json)"); return; }
+    const data = parseProjectJSON(await projectFile.text());
     if (!data) { alert("Invalid project file"); return; }
-    if (audioBuffer && fileName === data.fileName) applyProjectData(data, audioBuffer);
+    const audioFiles = files.filter(f => !isProject(f));
+    const audioFile = audioFiles.find(f => f.name === data.fileName) ?? audioFiles[0];
+    if (audioFile) openProjectWithAudio(data, audioFile);
+    else if (audioBuffer && fileName === data.fileName) applyProjectData(data, audioBuffer);
     else { setPendingProjectData(data); setLocateModalOpen(true); }
   };
 
@@ -954,14 +972,22 @@ function App() {
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm">
               <div className="bg-white p-6 rounded-lg shadow-2xl w-[450px] border">
                   <h3 className="text-lg font-semibold mb-2">Locate Audio File</h3>
-                  <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 text-sm text-yellow-700">
-                      Project references <strong>{pendingProjectData.fileName}</strong>.<br/>Please manually locate this file.
-                  </div>
+                  {locatingFile ? (
+                      <div className="flex items-center gap-3 bg-blue-50 border-l-4 border-blue-400 p-4 mb-4 text-sm text-blue-800" data-testid="locate-loading">
+                          <Loader2 size={18} className="animate-spin shrink-0" />
+                          <span>Loading <strong>{locatingFile}</strong>…<br/>Long recordings can take a minute to decode.</span>
+                      </div>
+                  ) : (
+                      <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 text-sm text-yellow-700">
+                          Project references <strong>{pendingProjectData.fileName}</strong>. Please locate this file.
+                          <div className="mt-2 text-xs text-yellow-800">Tip: in Load Project you can select the project and its audio file together.</div>
+                      </div>
+                  )}
                   <div className="flex justify-end gap-3">
-                      <button onClick={() => { setLocateModalOpen(false); setPendingProjectData(null); }} className="px-4 py-2 hover:bg-gray-100 rounded">Cancel</button>
-                      <button onClick={() => fileLocateInputRef.current?.click()} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Locate File...</button>
+                      <button onClick={() => { setLocateModalOpen(false); setPendingProjectData(null); }} disabled={!!locatingFile} className="px-4 py-2 hover:bg-gray-100 rounded disabled:opacity-50">Cancel</button>
+                      <button onClick={() => fileLocateInputRef.current?.click()} disabled={!!locatingFile} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Locate File...</button>
                   </div>
-                  <input ref={fileLocateInputRef} type="file" accept="audio/*" onChange={(e) => { if(e.target.files?.[0]) handleLocateAudio(e.target.files[0]); }} className="hidden" />
+                  <input ref={fileLocateInputRef} type="file" accept="audio/*" onChange={(e) => { if(e.target.files?.[0]) handleLocateAudio(e.target.files[0]); e.target.value = ''; }} className="hidden" />
               </div>
           </div>
       )}
