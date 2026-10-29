@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { PitchFrame, Note, SpectrogramData } from '../types';
 import { drawSpectrogram, drawGrid, drawNotes, drawPitchCurve, drawCandidates, drawSelection, freqToY, yToFreq, hzToNoteName } from '../utils/renderUtils';
+import { applyNoteResize } from '../utils/noteUtils';
 import { getSnappedTime, findNoteInteraction, isOnNote, InteractionMode } from '../utils/interactionUtils';
 import { useTimelineWheel } from '../hooks/useTimelineWheel';
 import { DIMENSIONS, COLORS } from '../constants';
@@ -24,7 +25,7 @@ interface PitchVisualizerProps {
   onSeek: (time: number) => void;
   onZoomWheel: (deltaPixels: number, mouseTime: number) => void;
   onSelectionChange: (range: [number, number] | null) => void;
-  onNoteResize: (noteId: string, newStart: number, newEnd: number) => void;
+  onNoteResize: (noteId: string, newStart: number, newEnd: number, detach?: boolean) => void;
   
   // Note Pitch Editing
   selectedNoteId: string | null;
@@ -95,8 +96,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   const activeNoteInitialBoundsRef = useRef<[number, number] | null>(null);
   
   // Dragged Note State (Visuals) & Ref (Logic)
-  const [draggedNoteState, setDraggedNoteState] = useState<{id: string, start: number, end: number, pitch?: number} | null>(null);
-  const draggedNoteRef = useRef<{id: string, start: number, end: number, pitch?: number} | null>(null);
+  const [draggedNoteState, setDraggedNoteState] = useState<{id: string, start: number, end: number, pitch?: number, detach?: boolean} | null>(null);
+  const draggedNoteRef = useRef<{id: string, start: number, end: number, pitch?: number, detach?: boolean} | null>(null);
 
   // Vertical Drag State
   const initialDragYRef = useRef<number>(0);
@@ -240,7 +241,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
             const oldEnd = activeNoteInitialBoundsRef.current[1];
             const newStart = Math.min(snappedTime, oldEnd - 0.001);
             if (activeNoteIdRef.current && draggedNoteRef.current) {
-                const newState = { ...draggedNoteRef.current, start: newStart, end: oldEnd };
+                const newState = { ...draggedNoteRef.current, start: newStart, end: oldEnd, detach: e.altKey };
                 setDraggedNoteState(newState);
                 draggedNoteRef.current = newState;
             }
@@ -249,7 +250,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
             const oldStart = activeNoteInitialBoundsRef.current[0];
             const newEnd = Math.max(snappedTime, oldStart + 0.001);
             if (activeNoteIdRef.current && draggedNoteRef.current) {
-                const newState = { ...draggedNoteRef.current, start: oldStart, end: newEnd };
+                const newState = { ...draggedNoteRef.current, start: oldStart, end: newEnd, detach: e.altKey };
                 setDraggedNoteState(newState);
                 draggedNoteRef.current = newState;
             }
@@ -270,7 +271,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   const handleMouseUp = (e: React.MouseEvent) => {
     // Commit Smart Note Resize
     if ((interactionMode === 'RESIZE_NOTE_START' || interactionMode === 'RESIZE_NOTE_END') && draggedNoteRef.current) {
-        onNoteResize(draggedNoteRef.current.id, draggedNoteRef.current.start, draggedNoteRef.current.end);
+        onNoteResize(draggedNoteRef.current.id, draggedNoteRef.current.start, draggedNoteRef.current.end, draggedNoteRef.current.detach);
     }
     
     // Commit Pitch Change
@@ -368,9 +369,12 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     // 5. Notes
     if (showNotes) {
         // If we are dragging a note, we temporarily swap the original note with the dragged state for rendering
-        const displayNotes = draggedNoteState 
-            ? notes.map(n => n.id === draggedNoteState.id ? { ...n, start: draggedNoteState.start, end: draggedNoteState.end, pitch: draggedNoteState.pitch || n.pitch } : n)
-            : notes;
+        // Resizes preview exactly what will be committed, including a neighbour that moves with a shared boundary
+        const displayNotes = !draggedNoteState
+            ? notes
+            : (interactionMode === 'RESIZE_NOTE_START' || interactionMode === 'RESIZE_NOTE_END')
+                ? applyNoteResize(notes, draggedNoteState.id, draggedNoteState.start, draggedNoteState.end, duration, draggedNoteState.detach)
+                : notes.map(n => n.id === draggedNoteState.id ? { ...n, pitch: draggedNoteState.pitch || n.pitch } : n);
 
         // Pass selected ID for highlighting
         drawNotes(ctx, displayNotes, viewStartTime, zoom, visibleWidth, containerHeight, selectedNoteId);
@@ -386,7 +390,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
         drawPitchCurve(ctx, pitchData, viewStartTime, zoom, visibleWidth, containerHeight);
     }
     
-  }, [pitchData, notes, spectrogramData, showSpectrogram, width, zoom, containerHeight, selectionRange, showCandidates, viewStartTime, showPitch, showNotes, duration, draggedNoteState, selectedNoteId]);
+  }, [pitchData, notes, spectrogramData, showSpectrogram, width, zoom, containerHeight, selectionRange, showCandidates, viewStartTime, showPitch, showNotes, duration, draggedNoteState, selectedNoteId, interactionMode]);
 
   const playheadX = (currentTime - viewStartTime) * zoom;
 

@@ -62,72 +62,85 @@ export const splitNote = (
     return [leftNote, rightNote];
 };
 
-// Handle smart resizing (pushing neighbors)
+// Shortest note a boundary move can leave (seconds)
+export const MIN_NOTE_DURATION = 0.01;
+// Boundaries closer than this are treated as shared (touching)
+const TOUCH_EPSILON = 1e-6;
+
+/**
+ * Move one boundary of a note without ever overlapping its neighbour.
+ * A boundary shared with a touching neighbour moves both notes (one time point).
+ * A free boundary that reaches the neighbour joins it and then moves both.
+ * The neighbour never shrinks below MIN_NOTE_DURATION.
+ * With `detach` (Alt held) only this note moves, and it stops at the neighbour.
+ */
+export const moveNoteBoundary = (
+    notes: Note[],
+    noteId: string,
+    edge: 'start' | 'end',
+    time: number,
+    duration = Infinity,
+    detach = false
+): Note[] => {
+    const sorted = [...notes].sort((a, b) => a.start - b.start);
+    const i = sorted.findIndex(n => n.id === noteId);
+    if (i < 0) return notes;
+    const note = sorted[i];
+    const result = [...sorted];
+
+    if (edge === 'start') {
+        const prev = sorted[i - 1];
+        const shared = !!prev && Math.abs(prev.end - note.start) < TOUCH_EPSILON;
+        const lower = !prev ? 0 : detach ? prev.end : prev.start + MIN_NOTE_DURATION;
+        const t = Math.max(lower, Math.min(note.end - MIN_NOTE_DURATION, time));
+        result[i] = { ...note, start: t };
+        if (prev && !detach && (shared || t < prev.end)) result[i - 1] = { ...prev, end: t };
+    } else {
+        const next = sorted[i + 1];
+        const shared = !!next && Math.abs(next.start - note.end) < TOUCH_EPSILON;
+        const upper = !next ? duration : detach ? next.start : next.end - MIN_NOTE_DURATION;
+        const t = Math.min(upper, Math.max(note.start + MIN_NOTE_DURATION, time));
+        result[i] = { ...note, end: t };
+        if (next && !detach && (shared || t > next.start)) result[i + 1] = { ...next, start: t };
+    }
+    return result;
+};
+
+// Apply a new [start, end] for a note through moveNoteBoundary (no pitch update)
+export const applyNoteResize = (
+    notes: Note[],
+    noteId: string,
+    newStart: number,
+    newEnd: number,
+    duration = Infinity,
+    detach = false
+): Note[] => {
+    const note = notes.find(n => n.id === noteId);
+    if (!note) return notes;
+    let result = notes;
+    if (newStart !== note.start) result = moveNoteBoundary(result, noteId, 'start', newStart, duration, detach);
+    if (newEnd !== note.end) result = moveNoteBoundary(result, noteId, 'end', newEnd, duration, detach);
+    return result;
+};
+
+// Resize a note (and a touching or reached neighbour), then update the pitch of every note that changed
 export const resizeNoteWithPush = (
     allNotes: Note[], 
     targetNoteId: string, 
     newStart: number, 
     newEnd: number, 
-    pitchData: PitchFrame[]
+    pitchData: PitchFrame[],
+    duration = Infinity,
+    detach = false
 ): Note[] => {
-    const targetNote = allNotes.find(n => n.id === targetNoteId);
-    if (!targetNote) return allNotes;
-
-    const otherNotes = allNotes.filter(n => n.id !== targetNoteId);
-    const modifiedNotes: Note[] = [];
-    const notesToDelete: string[] = [];
-
-    // Push Neighbors
-    otherNotes.forEach(neighbor => {
-        let nStart = neighbor.start;
-        let nEnd = neighbor.end;
-        let changed = false;
-
-        if (newEnd > nStart + 0.001 && newStart < nEnd - 0.001) {
-            changed = true;
-            if (nStart >= targetNote.start && nEnd > targetNote.end) {
-                 nStart = newEnd;
-            } else if (nEnd <= targetNote.end && nStart < targetNote.start) {
-                 nEnd = newStart;
-            } else {
-                 if (nStart < newStart) nEnd = newStart;
-                 else nStart = newEnd;
-            }
-        }
-
-        if (changed) {
-            if (nEnd - nStart < 0.01) {
-                notesToDelete.push(neighbor.id);
-            } else {
-                modifiedNotes.push({ ...neighbor, start: nStart, end: nEnd });
-            }
-        }
+    const before = new Map(allNotes.map(n => [n.id, n]));
+    return applyNoteResize(allNotes, targetNoteId, newStart, newEnd, duration, detach).map(n => {
+        const old = before.get(n.id);
+        if (old && old.start === n.start && old.end === n.end) return n;
+        const frames = pitchData.filter(f => f.timestamp >= n.start && f.timestamp <= n.end);
+        const pitch = calculateMedianPitch(frames);
+        return { ...n, pitch: pitch > 0 ? pitch : n.pitch };
     });
-
-    // Recalculate Neighbors
-    const finalOtherNotes = otherNotes.map(n => {
-        const mod = modifiedNotes.find(mn => mn.id === n.id);
-        if (notesToDelete.includes(n.id)) return null;
-        if (mod) {
-            const frames = pitchData.filter(f => f.timestamp >= mod.start && f.timestamp <= mod.end);
-            const pitch = calculateMedianPitch(frames);
-            return { ...mod, pitch: pitch > 0 ? pitch : mod.pitch };
-        }
-        return n;
-    }).filter((n): n is Note => n !== null);
-
-    // Recalculate Target
-    const targetFrames = pitchData.filter(f => f.timestamp >= newStart && f.timestamp <= newEnd);
-    const targetPitch = calculateMedianPitch(targetFrames);
-
-    const updatedTargetNote: Note = {
-        ...targetNote,
-        start: newStart,
-        end: newEnd,
-        pitch: targetPitch > 0 ? targetPitch : targetNote.pitch
-    };
-
-    return [...finalOtherNotes, updatedTargetNote].sort((a, b) => a.start - b.start);
 };
 
 // Get context range for a note (neighboring area)
