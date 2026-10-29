@@ -114,7 +114,7 @@ npx playwright install chromium firefox   # once
 npm run test:e2e       # browser tests in Chromium and Firefox (Playwright)
 ```
 
-**Deploy to GitHub Pages:**
+**Deploy to GitHub Pages:** happens automatically on every push to `main` (see `.github/workflows/deploy.yml`). To deploy by hand from your machine:
 ```bash
 npm run deploy
 ```
