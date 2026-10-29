@@ -34,6 +34,9 @@ interface PitchVisualizerProps {
   onPitchDragEnd: (noteId: string, newPitch: number) => void;
 }
 
+// Pointer movement below this is a click, not a selection drag
+const CLICK_THRESHOLD_PX = 4;
+
 const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   pitchData,
   notes,
@@ -222,10 +225,13 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     // Handle Active Interactions
     if (interactionMode !== 'NONE') {
         if (interactionMode === 'SELECTING') {
-            const anchor = selectionAnchorRef.current;
-            const start = Math.min(anchor, snappedTime);
-            const end = Math.max(anchor, snappedTime);
-            onSelectionChange([start, end]);
+            // A click that jitters by a pixel or two is still a click, not a tiny looping selection
+            if (Math.abs(rawTime - dragStartRef.current) >= CLICK_THRESHOLD_PX / zoom) {
+                const anchor = selectionAnchorRef.current;
+                const start = Math.min(anchor, snappedTime);
+                const end = Math.max(anchor, snappedTime);
+                if (end > start) onSelectionChange([start, end]);
+            }
 
         } else if (interactionMode === 'RESIZE_SELECTION_START' && initialSelectionRef.current) {
             const oldEnd = initialSelectionRef.current[1];
@@ -294,8 +300,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     if (interactionMode === 'SELECTING') {
         const { time } = getMouseInfo(e.clientX, e.clientY);
         const diff = Math.abs(time - dragStartRef.current);
-        if (diff < (3 / zoom)) { 
-             // Click (not drag)
+        if (diff < (CLICK_THRESHOLD_PX / zoom)) {
+             // Click (not drag): keep the selection only when clicking inside it
              if (!selectionRange || (time < selectionRange[0] || time > selectionRange[1])) {
                  onSelectionChange(null);
                  onSeek(time);

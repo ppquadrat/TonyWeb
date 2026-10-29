@@ -55,3 +55,10 @@ export const followPlayhead = (time: number, viewStart: number, zoom: number, vi
     }
     return viewStart;
 };
+
+// Selections shorter than this are not looped: they would stutter in place ("t-t-t-t")
+export const MIN_LOOP_DURATION = 0.05;
+export const loopRange = (state: { isLooping: boolean, selectionRange: [number, number] | null }) => {
+    const r = state.isLooping ? state.selectionRange : null;
+    return r && r[1] - r[0] >= MIN_LOOP_DURATION ? r : null;
+};

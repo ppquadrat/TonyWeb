@@ -32,7 +32,7 @@ test('create, label and delete segments in a layer', async ({ page }, testInfo) 
   const input = page.getByTestId('segment-label-input');
   await expect(input).toBeFocused();
   // The new segment shows as the time selection in the pitch view while labelling
-  await expect(page.getByTitle('Loop Selection')).toBeVisible();
+  await expect(page.getByTitle('Loop Selection')).toHaveClass(/bg-blue-200/);
   await page.screenshot({ path: testInfo.outputPath('editing.png') });
   await input.fill('la');
   await input.press('Enter');

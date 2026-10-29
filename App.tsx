@@ -17,7 +17,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
 import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
-import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor } from './utils/viewUtils';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor, loopRange } from './utils/viewUtils';
 import { X, Loader2 } from 'lucide-react';
 
 function App() {
@@ -177,24 +177,25 @@ function App() {
     const time = audioService.getCurrentTime();
     
     // Check Loop
-    if (state.isLooping && state.selectionRange) {
-      if (time >= state.selectionRange[1]) {
-        const loopDuration = state.selectionRange[1] - state.selectionRange[0];
+    const loop = loopRange(state);
+    if (loop) {
+      if (time >= loop[1]) {
+        const loopDuration = loop[1] - loop[0];
         audioService.stop(); 
         try {
             audioService.play(
                 state.audioBuffer!, 
                 state.pitchData, 
                 state.notes, 
-                state.selectionRange[0], 
+                loop[0], 
                 loopDuration, 
                 state.playbackSpeed // Pass speed
             );
         } catch(e) { console.error("Loop restart failed", e); }
         
-        setCurrentTime(state.selectionRange[0]);
+        setCurrentTime(loop[0]);
         // Keep loop start in view without jumping when it is already visible
-        setViewStartTime(followPlayhead(state.selectionRange[0], state.viewStartTime, state.zoom, state.viewportWidth));
+        setViewStartTime(followPlayhead(loop[0], state.viewStartTime, state.zoom, state.viewportWidth));
         
         animationFrameRef.current = requestAnimationFrame(updateLoop);
         return;
@@ -338,8 +339,9 @@ function App() {
       if (Math.abs(state.duration - startTime) < 0.1) startTime = 0;
 
       let playDuration = undefined;
-      if (state.isLooping && state.selectionRange) {
-        const [start, end] = state.selectionRange;
+      const loop = loopRange(state);
+      if (loop) {
+        const [start, end] = loop;
         // If cursor is outside loop, jump to start
         if (startTime < start || startTime >= end) startTime = start;
         playDuration = end - startTime;
@@ -398,11 +400,8 @@ function App() {
     if (state.isPlaying) {
       audioService.stop();
       let playDuration = undefined;
-      if (state.isLooping && state.selectionRange) {
-          if (target >= state.selectionRange[0] && target < state.selectionRange[1]) {
-              playDuration = state.selectionRange[1] - target;
-          }
-      }
+      const loop = loopRange(state);
+      if (loop && target >= loop[0] && target < loop[1]) playDuration = loop[1] - target;
       try {
         audioService.play(
             state.audioBuffer, 
@@ -434,9 +433,8 @@ function App() {
         let playDuration = undefined;
         let startTime = state.currentTime;
         
-        if (state.isLooping && state.selectionRange) {
-            playDuration = state.selectionRange[1] - startTime;
-        }
+        const loop = loopRange(state);
+        if (loop) playDuration = loop[1] - startTime;
 
         try {
             audioService.play(state.audioBuffer, state.pitchData, state.notes, startTime, playDuration, speed);

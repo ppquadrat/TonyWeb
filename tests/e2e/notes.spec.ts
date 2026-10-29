@@ -97,3 +97,19 @@ test('the view follows the cursor moved near the right edge, but not on other cl
   for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
   await expect.poll(viewX).toBeGreaterThan(after);
 });
+
+test('a click that jitters by a pixel or two does not make a looping selection', async ({ page }, testInfo) => {
+  const wav = writeToneWav(testInfo, [[220, 20]]);
+  await loadAudio(page, wav);
+  const box = await viewGeometry(page);
+  const x = box.x + box.width * 0.4, y = box.y + box.height - 10;
+  await page.mouse.move(x, y);
+  // Zoomed in, as when annotating notes
+  for (let i = 0; i < 25; i++) await page.mouse.wheel(0, -100);
+  await page.mouse.down();
+  // The hand wobbles right and back a little before the button is released
+  await page.mouse.move(x + 3, y, { steps: 3 });
+  await page.mouse.move(x + 1, y);
+  await page.mouse.up();
+  await expect(page.getByTitle('Loop Selection')).not.toHaveClass(/bg-blue-200/);
+});

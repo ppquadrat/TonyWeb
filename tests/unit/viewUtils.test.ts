@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, wheelDeltaToPixels, followPlayhead, revealCursor } from '../../utils/viewUtils';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, wheelDeltaToPixels, followPlayhead, revealCursor, loopRange } from '../../utils/viewUtils';
 
 describe('viewUtils', () => {
   it('keeps the view start inside the audio', () => {
@@ -47,5 +47,11 @@ describe('viewUtils', () => {
     expect(revealCursor(9, 0, 100, 1000)).toBeCloseTo(6);
     expect(revealCursor(14, 0, 100, 1000)).toBeCloseTo(11);
     expect(revealCursor(2, 4, 100, 1000)).toBeCloseTo(-1);
+  });
+
+  it('does not loop a selection too short to hear', () => {
+    expect(loopRange({ isLooping: true, selectionRange: [10, 10.004] })).toBeNull();
+    expect(loopRange({ isLooping: false, selectionRange: [10, 12] })).toBeNull();
+    expect(loopRange({ isLooping: true, selectionRange: [10, 12] })).toEqual([10, 12]);
   });
 });
