@@ -118,3 +118,41 @@ test('a click that jitters by a pixel or two does not make a looping selection',
   await page.mouse.up();
   await expect(page.getByTitle('Loop Selection')).not.toHaveClass(/bg-blue-200/);
 });
+
+test('double-clicking a note keeps the view and Escape clears the selection', async ({ page }, testInfo) => {
+  const duration = 30;
+  const wav = writeToneWav(testInfo, [[220, 2], [330, 2], [262, 26]]);
+  await loadAudio(page, wav);
+  await page.keyboard.press('KeyF');
+  const box = await viewGeometry(page);
+  const c = makeCoords(box, box.width / duration);
+  await createNote(page, c, 10, 11);
+  await page.keyboard.press('Escape');
+
+  // Zoom in around the note (the time under the mouse stays put)
+  await page.mouse.move(c.x(10.5), c.y(262));
+  for (let i = 0; i < 6; i++) await page.mouse.wheel(0, -100);
+  const viewX = async () => (await page.getByTestId('minimap-view').boundingBox())!.x;
+  const before = await viewX();
+
+  await page.mouse.dblclick(c.x(10.5), c.y(262));
+  await expect(page.locator('input[type="number"]')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(Math.abs(await viewX() - before)).toBeLessThan(1);
+  const loop = page.getByTitle('Loop Selection');
+  await expect(loop).toHaveClass(/bg-blue-200/);
+
+  await page.keyboard.press('Escape');
+  await expect(loop).not.toHaveClass(/bg-blue-200/);
+});
+
+test('Shift+Arrow selects f0 frame by frame', async ({ page }, testInfo) => {
+  const wav = writeToneWav(testInfo, [[220, 5]]);
+  await loadAudio(page, wav);
+  const loop = page.getByTitle('Loop Selection');
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(loop).toHaveClass(/bg-blue-200/);
+  // Back to nothing selected
+  await page.keyboard.press('Shift+ArrowLeft');
+  await expect(loop).not.toHaveClass(/bg-blue-200/);
+});

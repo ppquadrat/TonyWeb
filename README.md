@@ -56,7 +56,7 @@ The light blue blocks represent discrete notes.
     *   *No overlaps:* Notes never overlap. A boundary shared by two touching notes moves both, and a boundary dragged into a neighbouring note joins it and then moves both. Hold `Alt` to move only this note's edge (it then stops at the neighbour, which lets you open a gap).
     *   *Snap:* Boundaries snap to the nearest audio frame and adjacent notes. Hold `Shift` to disable snapping.
 *   **Correct Note Pitch (Innovation):**
-    1.  **Double-click** a note body. Once selected, grabbing anywhere except the outer edges moves the note, even for very short notes. This selects the note and automatically highlights a "musical context" region (neighboring notes).
+    1.  **Double-click** a note body. Once selected, grabbing anywhere except the outer edges moves the note, even for very short notes. This selects the note and highlights a context region around it (up to 2 s, scaled to the zoom and kept on screen). `Esc` clears the selection.
     2.  **Drag** the note body up or down to adjust its pitch.
     3.  **Release** the mouse to automatically hear the note played back within its context for auditory verification.
 *   **Split Note:** Place the red playback cursor where you want to cut, then press `/` (Forward Slash) or click the Scissors icon.
@@ -92,6 +92,8 @@ Segment layers are saved in the project file. The project stores the audio file 
 | **Pick Pitch Below** | `Cmd + Down` |
 | **Save Project** | `Cmd + S` / `Ctrl + S` |
 | **Nudge Cursor** | `Left` / `Right` Arrow |
+| **Select f0 frame by frame** | `Shift` + `Left` / `Right` Arrow |
+| **Clear Selection** | `Esc` |
 | **Fit Whole File** | `F` |
 | **Selection to Segment / Edit Label** | `Enter` |
 | **Next / Previous Segment (while labelling)** | `Tab` / `Shift + Tab` |

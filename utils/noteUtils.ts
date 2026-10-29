@@ -9,6 +9,11 @@ export const snapTime = (time: number, sampleRate: number): number => {
     return Math.round(time / frameDur) * frameDur;
 };
 
+// f0 frames covered by a selection: half-open [start, end), so a selection one frame wide
+// (from one frame to the next) covers exactly one frame
+export const isFrameInRange = (timestamp: number, start: number, end: number) =>
+    timestamp >= start - 1e-9 && timestamp < end - 1e-9;
+
 // Calculate median pitch from frames
 export const calculateMedianPitch = (frames: PitchFrame[]): number => {
   const freqs = frames

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moveNoteBoundary, resizeNoteWithPush, placeNewNote, fallbackNotePitch } from '../../utils/noteUtils';
+import { moveNoteBoundary, resizeNoteWithPush, placeNewNote, fallbackNotePitch, isFrameInRange } from '../../utils/noteUtils';
 import { Note, PitchFrame } from '../../types';
 
 const note = (id: string, start: number, end: number, pitch = 220): Note => ({ id, start, end, pitch });
@@ -78,5 +78,13 @@ describe('fallbackNotePitch', () => {
     const frames: PitchFrame[] = [{ timestamp: 3, frequency: 250, hasPitch: true } as PitchFrame];
     expect(fallbackNotePitch([], frames, 1.5, 2)).toBe(250);
     expect(fallbackNotePitch([], [], 1.5, 2)).toBe(220);
+  });
+});
+
+describe('isFrameInRange', () => {
+  it('covers exactly one frame for a one-frame selection', () => {
+    const hop = 0.01;
+    const frames = [0, 1, 2, 3].map(k => k * hop);
+    expect(frames.filter(t => isFrameInRange(t, hop, 2 * hop))).toEqual([hop]);
   });
 });

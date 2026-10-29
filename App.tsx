@@ -14,7 +14,7 @@ import { generateSegmentsCSV, generateTextGrid, generateSegmentSVL, parseTextGri
 import { addSegment, createLayer, deleteSegment, splitSegment } from './utils/segmentUtils';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange, placeNewNote, fallbackNotePitch } from './utils/noteUtils';
+import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange, placeNewNote, fallbackNotePitch, isFrameInRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
 import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
 import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor, loopRange } from './utils/viewUtils';
@@ -125,8 +125,10 @@ function App() {
   // so the view never moves under the pointer.
   const pointerDownRef = useRef(false);
   const revealPendingRef = useRef(false);
+  const skipRevealRef = useRef(false); // set by actions that place the cursor deliberately
   const revealCursorNow = useCallback(() => {
     const s = stateRef.current;
+    if (skipRevealRef.current) { skipRevealRef.current = false; return; }
     if (s.isPlaying || s.duration <= 0) return;
     const next = clampViewStart(revealCursor(s.currentTime, s.viewStartTime, s.zoom, s.viewportWidth), s.zoom, s.viewportWidth, s.duration);
     if (next !== s.viewStartTime) setViewStartTime(next);
@@ -663,7 +665,7 @@ function App() {
     const [start, end] = selectionRange;
     let hasChanged = false;
     const newData = analysis.pitchData.map(frame => {
-        if (frame.timestamp >= start && frame.timestamp <= end && frame.candidates?.length) {
+        if (isFrameInRange(frame.timestamp, start, end) && frame.candidates?.length) {
             const sorted = [...frame.candidates].sort((a, b) => a.frequency - b.frequency);
             const currIdx = sorted.findIndex(c => Math.abs(c.frequency - frame.frequency) < 0.1);
             let newIdx = currIdx;
@@ -691,7 +693,7 @@ function App() {
     const [start, end] = selectionRange;
     let hasChanged = false;
     const newData = analysis.pitchData.map(f => {
-        if (f.timestamp >= start && f.timestamp <= end && (f.hasPitch || f.frequency > 0)) {
+        if (isFrameInRange(f.timestamp, start, end) && (f.hasPitch || f.frequency > 0)) {
             hasChanged = true;
             return { ...f, frequency: 0, hasPitch: false };
         }
@@ -740,13 +742,21 @@ function App() {
   const handleNoteSelect = useCallback((noteId: string) => {
      const note = analysis.notes.find(n => n.id === noteId);
      if (note && audioBuffer) {
-        // 1. Calculate Context Selection (e.g. Note + 2 seconds or neighboring notes)
-        const range = getNoteContextRange(note, 2.0); // 2 seconds context
+        // 1. Context selection around the note, scaled to the view (a fifth of the visible
+        //    time on each side, at most 2 s) and kept on screen, so the view never jumps
+        const s = stateRef.current;
+        const viewDuration = s.viewportWidth / s.zoom;
+        const padded = getNoteContextRange(note, Math.min(2.0, viewDuration * 0.2));
+        const range: [number, number] = [
+            Math.max(padded[0], Math.min(s.viewStartTime, note.start)),
+            Math.min(padded[1], s.duration, Math.max(s.viewStartTime + viewDuration, note.end)),
+        ];
         setSelectionRange(range);
         setIsLooping(true);
         // 2. Lock Note
         setSelectedNoteId(noteId);
-        // 3. Move playhead to start of selection
+        // 3. Move playhead to start of selection, without scrolling the view
+        skipRevealRef.current = range[0] !== s.currentTime;
         setCurrentTime(range[0]);
      }
   }, [analysis.notes, audioBuffer]);
@@ -928,6 +938,38 @@ function App() {
   }, [viewportWidth, duration]);
 
   // --- Initialize Keyboard Shortcuts ---
+  // Shift+Arrow: grow or shrink the selection one f0 frame at a time from the cursor,
+  // so a single wrong frame can be selected and corrected at any zoom
+  const keyboardSelectionRef = useRef<{ anchor: number, focus: number, range: [number, number] } | null>(null);
+  const handleExtendSelection = useCallback((dir: 1 | -1) => {
+    const s = stateRef.current;
+    if (!s.audioBuffer) return;
+    const frame = YIN_HOP_SIZE / s.audioBuffer.sampleRate;
+    let sel = keyboardSelectionRef.current;
+    const current = s.selectionRange;
+    if (!sel || !current || Math.abs(current[0] - sel.range[0]) > 1e-9 || Math.abs(current[1] - sel.range[1]) > 1e-9) {
+        const k = Math.round(s.currentTime / frame);
+        sel = { anchor: k, focus: k, range: [0, 0] };
+    }
+    const maxFrame = Math.floor(s.duration / frame);
+    const focus = Math.max(0, Math.min(maxFrame, sel.focus + dir));
+    if (focus === sel.anchor) {
+        keyboardSelectionRef.current = null;
+        handleSelectionChange(null);
+        return;
+    }
+    const range: [number, number] = [Math.min(sel.anchor, focus) * frame, Math.max(sel.anchor, focus) * frame];
+    keyboardSelectionRef.current = { anchor: sel.anchor, focus, range };
+    setSelectionRange(range);
+    setIsLooping(true);
+    setSelectedSegment(null);
+  }, [handleSelectionChange]);
+
+  const handleEscape = useCallback(() => {
+    setEditingSegment(null);
+    handleSelectionChange(null);
+  }, [handleSelectionChange]);
+
   useKeyboardShortcuts({
     onPlayPause: handlePlayPause,
     onDeleteNotes: handleDelete,
@@ -940,6 +982,8 @@ function App() {
     onRedo: redo,
     onPitchCorrection: handlePitchCorrection,
     onSeek: handleSeek,
+    onExtendSelection: handleExtendSelection,
+    onEscape: handleEscape,
     onFitView: handleFitView,
     currentTime: currentTime
   });

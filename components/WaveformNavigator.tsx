@@ -11,6 +11,10 @@ interface WaveformNavigatorProps {
   onViewChange: (startTime: number) => void;
 }
 
+// Drag speed for the view handle: 1:1 while the view is a sizeable part of the file,
+// slowing to a fifth when it is a tiny sliver (zoomed far into a long file)
+export const dragGain = (viewFraction: number) => Math.max(0.2, Math.min(1, viewFraction * 20));
+
 const WaveformNavigator: React.FC<WaveformNavigatorProps> = ({ 
   audioBuffer, 
   currentTime, 
@@ -25,6 +29,8 @@ const WaveformNavigator: React.FC<WaveformNavigatorProps> = ({
   const [isDraggingView, setIsDraggingView] = useState(false);
   const dragStartX = useRef(0);
   const dragStartTime = useRef(0);
+  const pendingViewRef = useRef<number | null>(null);
+  const frameRef = useRef<number | null>(null);
 
   // Draw static waveform
   useEffect(() => {
@@ -88,14 +94,22 @@ const WaveformNavigator: React.FC<WaveformNavigatorProps> = ({
 
     const rect = containerRef.current.getBoundingClientRect();
     const pixelDelta = e.clientX - dragStartX.current;
-    const timeDelta = (pixelDelta / rect.width) * duration;
-    
-    let newTime = dragStartTime.current + timeDelta;
-    
+    // One minimap pixel can be seconds of a long file, so when the view is a small part
+    // of the file the drag is geared down (for big jumps, click the minimap instead)
+    const timeDelta = (pixelDelta / rect.width) * duration * dragGain(viewDuration / duration);
+
     // Clamp
-    newTime = Math.max(0, Math.min(newTime, duration - viewDuration));
-    
-    onViewChange(newTime);
+    const newTime = Math.max(0, Math.min(dragStartTime.current + timeDelta, duration - viewDuration));
+
+    // At most one view update per frame, so the drag stays smooth
+    pendingViewRef.current = newTime;
+    if (frameRef.current === null) {
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = null;
+        if (pendingViewRef.current !== null) onViewChange(pendingViewRef.current);
+        pendingViewRef.current = null;
+      });
+    }
   }, [isDraggingView, duration, viewDuration, onViewChange]);
 
   const handleGlobalMouseUp = useCallback(() => {
