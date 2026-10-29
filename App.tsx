@@ -14,7 +14,7 @@ import { generateSegmentsCSV, generateTextGrid, generateSegmentSVL, parseTextGri
 import { addSegment, createLayer, deleteSegment, splitSegment } from './utils/segmentUtils';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
+import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange, placeNewNote } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
 import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
 import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor, loopRange } from './utils/viewUtils';
@@ -702,11 +702,12 @@ function App() {
 
   const handleCreateNote = useCallback(() => {
     if (!selectionRange) return;
-    const [start, end] = selectionRange;
-    const filteredNotes = analysis.notes.filter(n => !((n.start + n.end)/2 >= start && (n.start + n.end)/2 <= end));
+    const { kept: filteredNotes, range } = placeNewNote(analysis.notes, selectionRange[0], selectionRange[1]);
+    if (!range) return; // no room: the selection lies inside another note
+    const [start, end] = range;
     const frames = analysis.pitchData.filter(f => f.timestamp >= start && f.timestamp <= end);
     const pitch = calculateMedianPitch(frames);
-    
+
     if (pitch > 0) {
         const newNote: Note = { id: crypto.randomUUID(), start, end, pitch, state: 'default' };
         commitHistory({ ...analysis, notes: [...filteredNotes, newNote] });

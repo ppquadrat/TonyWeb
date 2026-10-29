@@ -68,6 +68,24 @@ export const MIN_NOTE_DURATION = 0.01;
 const TOUCH_EPSILON = 1e-6;
 
 /**
+ * Make room for a note created from a selection. Notes whose middle lies inside the
+ * selection are replaced; the new note is then trimmed to the free gap between the
+ * remaining notes, so notes never overlap. Returns null when there is no room
+ * (e.g. the selection lies inside a longer note).
+ */
+export const placeNewNote = (notes: Note[], start: number, end: number) => {
+    if (notes.some(n => n.start <= start && n.end >= end)) return { kept: notes, range: null };
+    const kept = notes.filter(n => !((n.start + n.end) / 2 >= start && (n.start + n.end) / 2 <= end));
+    let a = start, b = end;
+    for (const n of kept) {
+        if (n.end <= a + TOUCH_EPSILON || n.start >= b - TOUCH_EPSILON) continue;
+        if (n.start <= a) a = n.end;        // overlaps the left end
+        else if (n.end >= b) b = n.start;   // overlaps the right end
+    }
+    return { kept, range: b - a >= MIN_NOTE_DURATION ? [a, b] as [number, number] : null };
+};
+
+/**
  * Move one boundary of a note without ever overlapping its neighbour.
  * A boundary shared with a touching neighbour moves both notes (one time point).
  * A free boundary that reaches the neighbour joins it and then moves both.

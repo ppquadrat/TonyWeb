@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moveNoteBoundary, resizeNoteWithPush } from '../../utils/noteUtils';
+import { moveNoteBoundary, resizeNoteWithPush, placeNewNote } from '../../utils/noteUtils';
 import { Note, PitchFrame } from '../../types';
 
 const note = (id: string, start: number, end: number, pitch = 220): Note => ({ id, start, end, pitch });
@@ -53,5 +53,21 @@ describe('resizeNoteWithPush', () => {
     expect(r.a.end).toBe(0.5);
     expect(r.b.pitch).toBe(300);
     expect(r.a.pitch).toBe(200);
+  });
+});
+
+describe('placeNewNote', () => {
+  it('refuses a note inside a longer note', () => {
+    expect(placeNewNote([note('a', 0, 4)], 1, 2).range).toBeNull();
+  });
+  it('trims the new note to the gap between overlapping neighbours', () => {
+    const r = placeNewNote([note('a', 0, 1), note('b', 2, 3)], 0.8, 2.4);
+    expect(r.range).toEqual([1, 2]);
+    expect(r.kept.map(n => n.id)).toEqual(['a', 'b']);
+  });
+  it('replaces notes whose middle is inside the selection', () => {
+    const r = placeNewNote([note('a', 1, 2), note('b', 3, 4)], 0.5, 2.5);
+    expect(r.range).toEqual([0.5, 2.5]);
+    expect(r.kept.map(n => n.id)).toEqual(['b']);
   });
 });
