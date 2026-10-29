@@ -185,12 +185,10 @@ export class AudioService {
 
     this.source.connect(this.originalGain);
     
-    // source.start takes (when, offset, duration)
-    if (duration !== undefined) {
-      this.source.start(this.anchorTime, startOffset, duration);
-    } else {
-      this.source.start(this.anchorTime, startOffset);
-    }
+    // Start at the anchor and, for a selection, stop at its end. The end is set with stop()
+    // rather than start()'s duration argument, which Firefox has cut short on long files.
+    this.source.start(this.anchorTime, startOffset);
+    if (duration !== undefined) this.source.stop(this.anchorTime + duration / playbackRate);
 
     this.endBufferTime = duration !== undefined ? startOffset + duration : Infinity;
     this.scheduledUntil = startOffset;

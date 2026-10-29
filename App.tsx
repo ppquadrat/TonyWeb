@@ -368,6 +368,33 @@ function App() {
       setIsPlaying(true);
   };
 
+  // When the selection (loop) changes during playback, restart on the new range; otherwise the
+  // audio stops at the old selection's end while the playhead runs on to the new end in silence.
+  // While a button is held (dragging the selection) wait for the release.
+  const restartPendingRef = useRef(false);
+  const restartForSelection = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.isPlaying || !s.audioBuffer) return;
+    audioService.stop();
+    playInternal({ ...s, currentTime: audioService.currentTime });
+  }, []);
+  const lastLoopRef = useRef<string>('');
+  useEffect(() => {
+    const key = isLooping && selectionRange ? `${selectionRange[0]}-${selectionRange[1]}` : '';
+    if (key === lastLoopRef.current) return;
+    lastLoopRef.current = key;
+    if (!stateRef.current.isPlaying) return;
+    if (pointerDownRef.current) restartPendingRef.current = true;
+    else restartForSelection();
+  }, [selectionRange, isLooping, restartForSelection]);
+  useEffect(() => {
+    const up = () => {
+      if (restartPendingRef.current) { restartPendingRef.current = false; restartForSelection(); }
+    };
+    window.addEventListener('pointerup', up);
+    return () => window.removeEventListener('pointerup', up);
+  }, [restartForSelection]);
+
   // --- Playback Controls ---
   const handlePlayPause = useCallback(() => {
     const state = stateRef.current;

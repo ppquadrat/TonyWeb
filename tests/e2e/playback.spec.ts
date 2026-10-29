@@ -44,3 +44,34 @@ test('a long selection keeps sounding all the way through', async ({ page }, tes
   test.skip(samples[0].level === 0, 'no audio output in this browser here');
   for (const s of samples) expect(s.level).toBeGreaterThan(0.05);
 });
+
+test('changing the selection during playback keeps the sound going', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  await page.addInitScript(tapOutput);
+  await loadAudio(page, writeToneWav(testInfo, [[220, 40]]));
+  await page.keyboard.press('KeyF');
+  const box = await viewGeometry(page);
+  const zoom = box.width / 40;
+  const x = (t: number) => box.x + t * zoom;
+  const y = box.y + box.height - 10;
+  const select = async (a: number, b: number) => {
+    await page.mouse.move(x(a), y);
+    await page.mouse.down();
+    await page.mouse.move(x(b), y, { steps: 10 });
+    await page.mouse.up();
+  };
+  // Play a 3 s loop, then widen it to 15 s while it plays
+  await select(5, 8);
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(1000);
+  await select(5, 20);
+
+  const samples = [];
+  for (let i = 0; i < 5; i++) {
+    await page.waitForTimeout(1500);
+    samples.push(await page.evaluate(outputLevel));
+  }
+  console.log(testInfo.project.name, 'output after widening', samples.map(s => s.level.toFixed(3)).join(' '));
+  test.skip(samples.every(s => s.level === 0) && samples[0].state !== 'running', 'no audio output in this browser here');
+  for (const s of samples) expect(s.level).toBeGreaterThan(0.05);
+});
