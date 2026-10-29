@@ -2,6 +2,20 @@
 
 import { MixerState, PitchFrame, Note } from "../types";
 
+const PLAYBACK_LEAD = 0.05; // Seconds between pressing play and the scheduled start
+const SCHEDULE_AHEAD = 5; // Seconds of synth events scheduled ahead of the playhead
+const SCHEDULER_INTERVAL_MS = 500;
+
+// Index of the first item whose time is >= t (items sorted by time)
+const firstIndexAtOrAfter = <T,>(items: T[], timeOf: (item: T) => number, t: number) => {
+  let lo = 0, hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (timeOf(items[mid]) < t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+};
+
 export class AudioService {
   private context: AudioContext;
   private source: AudioBufferSourceNode | null = null;
@@ -33,6 +47,17 @@ export class AudioService {
 
   // Synth Nodes (Notes) - We track active note oscillators to stop them
   private activeNoteNodes: AudioNode[] = [];
+
+  // Synth events are scheduled a few seconds ahead at a time instead of all at once:
+  // scheduling a long file in one go blocks the main thread, which delays the start of
+  // the audio while the playhead clock is already running (playhead ahead of the audio).
+  private schedulerTimer: number | null = null;
+  private scheduledUntil = 0; // Buffer time up to which synth events are scheduled
+  private pitchFrames: PitchFrame[] = [];
+  private pitchIndex = 0;
+  private synthNotes: Note[] = [];
+  private noteIndex = 0;
+  private endBufferTime = Infinity;
 
   constructor() {
     // Optimization: latencyHint 'playback' encourages the browser to use high-quality resampling/time-stretching algorithms
@@ -133,7 +158,9 @@ export class AudioService {
       this.context.resume();
     }
 
-    this.anchorTime = this.context.currentTime;
+    // Start everything at one explicit context time, slightly ahead, so the audio
+    // and the playhead clock share the same origin
+    this.anchorTime = this.context.currentTime + PLAYBACK_LEAD;
     this.startOffset = startOffset;
     this.playbackRate = playbackRate;
     this.isPlaying = true;
@@ -159,31 +186,53 @@ export class AudioService {
     
     // source.start takes (when, offset, duration)
     if (duration !== undefined) {
-      this.source.start(0, startOffset, duration);
+      this.source.start(this.anchorTime, startOffset, duration);
     } else {
-      this.source.start(0, startOffset);
+      this.source.start(this.anchorTime, startOffset);
     }
 
+    this.endBufferTime = duration !== undefined ? startOffset + duration : Infinity;
+    this.scheduledUntil = startOffset;
+
     // 2. Setup Pitch Synthesizer (Continuous)
-    if (pitchData && pitchData.length > 0) {
-      this.startPitchSynth(pitchData, startOffset, duration);
+    this.pitchFrames = pitchData ?? [];
+    this.pitchIndex = firstIndexAtOrAfter(this.pitchFrames, f => f.timestamp, startOffset);
+    if (this.pitchFrames.length > 0) {
+      this.startPitchSynth(duration);
     }
 
     // 3. Setup Note Synthesizer (Discrete)
-    if (notes && notes.length > 0) {
-        this.startNoteSynth(notes, startOffset, duration);
-    }
+    this.synthNotes = [...(notes ?? [])].sort((a, b) => a.start - b.start);
+    this.noteIndex = 0;
+    this.activeNoteNodes = [];
+
+    // 4. Schedule synth events in a window ahead of the playhead
+    this.scheduleAhead();
+    this.schedulerTimer = window.setInterval(() => this.scheduleAhead(), SCHEDULER_INTERVAL_MS);
   }
 
-  private startPitchSynth(pitchData: PitchFrame[], startOffset: number, duration?: number) {
+  // Schedule pitch and note synth events up to SCHEDULE_AHEAD seconds past the playhead
+  private scheduleAhead() {
+    if (!this.isPlaying) return;
+    const target = Math.min(this.endBufferTime, Math.max(this.getCurrentTime(), this.startOffset) + SCHEDULE_AHEAD);
+    if (target <= this.scheduledUntil) return;
+    this.schedulePitch(this.scheduledUntil, target);
+    this.scheduleNotes(target);
+    this.scheduledUntil = target;
+  }
+
+  // Map buffer time to context time
+  private toContextTime(bufferTime: number) {
+    return this.anchorTime + (bufferTime - this.startOffset) / this.playbackRate;
+  }
+
+  private startPitchSynth(duration?: number) {
     const now = this.context.currentTime;
-    // Calculate end time in Buffer Domain
-    const endBufferTime = duration !== undefined ? startOffset + duration : Infinity;
     
     // Calculate stop time in Context Domain (Wall Clock)
     // Wall Duration = Buffer Duration / Rate
     const wallDuration = duration !== undefined ? duration / this.playbackRate : undefined;
-    const stopTime = wallDuration !== undefined ? now + wallDuration : undefined;
+    const stopTime = wallDuration !== undefined ? this.anchorTime + wallDuration : undefined;
     
     // Sound Design: Smooth "Humming" (Triangle)
     // We make this softer (lower cutoff) to contrast with the bright notes
@@ -213,31 +262,33 @@ export class AudioService {
     filter.connect(this.synthGain);
     this.synthGain.connect(this.pitchGain);
 
-    // Scheduling
-    pitchData.forEach((frame) => {
-        const frameTime = frame.timestamp;
-        if (frameTime < startOffset) return;
-        if (frameTime > endBufferTime) return;
-
-        // MATH: We must map "Buffer Time" to "Context Time"
-        const timeFromNow = (frameTime - startOffset) / this.playbackRate;
-        const scheduleTime = this.anchorTime + timeFromNow;
-        
-        if (scheduleTime < now) return;
-
-        if (frame.hasPitch && frame.frequency > 0) {
-            // Using linearRamp for more stable pitch tracking at slow speeds
-            this.synthOsc?.frequency.linearRampToValueAtTime(frame.frequency, scheduleTime);
-            this.synthGain?.gain.linearRampToValueAtTime(0.7, scheduleTime);
-        } else {
-            this.synthGain?.gain.linearRampToValueAtTime(0.0, scheduleTime);
-        }
-    });
-
     this.synthOsc.start(0);
     if (stopTime !== undefined) {
         this.synthOsc.stop(stopTime);
         this.vibratoOsc?.stop(stopTime);
+    }
+  }
+
+  // Schedule pitch synth automation for frames in [from, to) (buffer time)
+  private schedulePitch(_from: number, to: number) {
+    if (!this.synthOsc || !this.synthGain) return;
+    const now = this.context.currentTime;
+    const frames = this.pitchFrames;
+    for (; this.pitchIndex < frames.length; this.pitchIndex++) {
+        const frame = frames[this.pitchIndex];
+        if (frame.timestamp >= to || frame.timestamp > this.endBufferTime) break;
+
+        // MATH: We must map "Buffer Time" to "Context Time"
+        const scheduleTime = this.toContextTime(frame.timestamp);
+        if (scheduleTime < now) continue;
+
+        if (frame.hasPitch && frame.frequency > 0) {
+            // Using linearRamp for more stable pitch tracking at slow speeds
+            this.synthOsc.frequency.linearRampToValueAtTime(frame.frequency, scheduleTime);
+            this.synthGain.gain.linearRampToValueAtTime(0.7, scheduleTime);
+        } else {
+            this.synthGain.gain.linearRampToValueAtTime(0.0, scheduleTime);
+        }
     }
   }
 
@@ -284,25 +335,21 @@ export class AudioService {
      return [osc, env, filter];
   }
 
-  private startNoteSynth(notes: Note[], startOffset: number, duration?: number) {
+  // Schedule note voices that start before `to` (buffer time)
+  private scheduleNotes(to: number) {
       const now = this.context.currentTime;
-      const endBufferTime = duration !== undefined ? startOffset + duration : Infinity;
+      const notes = this.synthNotes;
 
-      this.activeNoteNodes = [];
-
-      notes.forEach(note => {
-          if (note.end < startOffset) return;
-          if (note.start > endBufferTime) return;
+      for (; this.noteIndex < notes.length; this.noteIndex++) {
+          const note = notes[this.noteIndex];
+          if (note.start >= to || note.start > this.endBufferTime) break;
+          if (note.end < this.startOffset) continue;
 
           // Map Buffer Time to Context Time with Speed Scaling
-          const relStart = (note.start - startOffset) / this.playbackRate;
-          const relEnd = (note.end - startOffset) / this.playbackRate;
+          const noteStartTime = Math.max(now, this.toContextTime(note.start));
+          const noteEndTime = this.toContextTime(Math.min(note.end, this.endBufferTime));
           
-          // Absolute Context Time
-          const noteStartTime = Math.max(now, this.anchorTime + relStart);
-          const noteEndTime = this.anchorTime + relEnd;
-          
-          if (noteEndTime < now) return;
+          if (noteEndTime < now) continue;
           
           let wallDur = noteEndTime - noteStartTime;
           if (wallDur < 0.05) wallDur = 0.05; 
@@ -311,10 +358,14 @@ export class AudioService {
           // Note: Pitch remains the same (note.pitch)
           const nodes = this.createPulseNotePatch(note.pitch, noteStartTime, wallDur);
           this.activeNoteNodes.push(...nodes);
-      });
+      }
   }
 
   stop() {
+    if (this.schedulerTimer !== null) {
+      window.clearInterval(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
     if (this.source) {
       try { 
           if (this.source instanceof AudioScheduledSourceNode) {
@@ -355,15 +406,25 @@ export class AudioService {
     this.isPlaying = false;
     // Calculate exact buffer position where we stopped
     // elapsedBufferTime = (ctx.currentTime - anchorTime) * rate
-    const elapsed = (this.context.currentTime - this.anchorTime) * this.playbackRate;
+    const elapsed = Math.max(0, this.context.currentTime - this.getOutputLatency() - this.anchorTime) * this.playbackRate;
     this.pauseTime = this.startOffset + elapsed;
   }
 
   getCurrentTime(): number {
     if (!this.isPlaying) return this.pauseTime;
     // elapsedBufferTime = (ctx.currentTime - anchorTime) * rate
-    const elapsed = (this.context.currentTime - this.anchorTime) * this.playbackRate;
+    // Before the scheduled start (PLAYBACK_LEAD) the playhead stays at the start offset.
+    // The context clock runs ahead of what is heard by the output latency, which can be
+    // large with latencyHint 'playback', so subtract it to keep the playhead on the sound.
+    const heardTime = this.context.currentTime - this.getOutputLatency();
+    const elapsed = Math.max(0, heardTime - this.anchorTime) * this.playbackRate;
     return this.startOffset + elapsed;
+  }
+
+  private getOutputLatency(): number {
+    const ctx = this.context as AudioContext & { outputLatency?: number };
+    const latency = (ctx.outputLatency ?? 0) || (ctx.baseLatency ?? 0);
+    return Number.isFinite(latency) ? Math.max(0, Math.min(latency, 1)) : 0;
   }
 }
 
