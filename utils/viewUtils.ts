@@ -35,6 +35,19 @@ export const wheelZoomFactor = (deltaPixels: number) => {
     return Math.exp(-clamped * 0.002);
 };
 
+// When the cursor is moved by hand (click, arrow keys, note selection) and lands near an
+// edge of the view or outside it, scroll so there is room ahead in the direction it was going:
+// past the right edge it lands a third of the way in, past the left edge two thirds of the way.
+// Clicks elsewhere leave the view alone.
+export const REVEAL_LEFT_EDGE = 0.1;
+export const REVEAL_RIGHT_EDGE = 0.85;
+export const revealCursor = (time: number, viewStart: number, zoom: number, viewportWidth: number) => {
+    const viewDuration = viewportWidth / zoom;
+    if (time > viewStart + viewDuration * REVEAL_RIGHT_EDGE) return time - viewDuration * 0.3;
+    if (time < viewStart + viewDuration * REVEAL_LEFT_EDGE) return Math.max(0, time - viewDuration * 0.7);
+    return viewStart;
+};
+
 // Move the view only when the playhead leaves it ("page turn" follow).
 export const followPlayhead = (time: number, viewStart: number, zoom: number, viewportWidth: number) => {
     const viewDuration = viewportWidth / zoom;
@@ -42,4 +55,11 @@ export const followPlayhead = (time: number, viewStart: number, zoom: number, vi
         return time - viewDuration * 0.1;
     }
     return viewStart;
+};
+
+// Selections shorter than this are not looped: they would stutter in place ("t-t-t-t")
+export const MIN_LOOP_DURATION = 0.05;
+export const loopRange = (state: { isLooping: boolean, selectionRange: [number, number] | null }) => {
+    const r = state.isLooping ? state.selectionRange : null;
+    return r && r[1] - r[0] >= MIN_LOOP_DURATION ? r : null;
 };

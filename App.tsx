@@ -1,20 +1,24 @@
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
 import Controls from './components/Controls';
 import WaveformNavigator from './components/WaveformNavigator';
 import PitchVisualizer from './components/PitchVisualizer';
+import SegmentLanes, { SegmentRef } from './components/SegmentLanes';
 import Mixer from './components/Mixer';
 import { audioService } from './services/audioService';
 import { extractPitch, YIN_HOP_SIZE } from './services/yin';
 import { generateSpectrogram } from './services/spectrogram';
 import { generateProjectJSON, generatePitchCSV, generateNotesCSV, generateSVL, parseProjectJSON, parseCSV } from './services/exportService';
-import { MixerState, PitchFrame, Note, SpectrogramData } from './types';
+import { MixerState, PitchFrame, Note, SpectrogramData, SegmentLayer } from './types';
+import { generateSegmentsCSV, generateTextGrid, generateSegmentSVL, parseTextGrid, parseSegmentsCSV } from './services/segmentExport';
+import { addSegment, createLayer, deleteSegment, splitSegment } from './utils/segmentUtils';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange } from './utils/noteUtils';
+import { calculateMedianPitch, snapTime, splitNote, resizeNoteWithPush, getNoteContextRange, placeNewNote, fallbackNotePitch, isFrameInRange } from './utils/noteUtils';
 import { sliceAudioBuffer } from './utils/audioUtils';
-import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead } from './utils/viewUtils';
-import { X } from 'lucide-react';
+import { getArtifactDownloads, artifactFilename } from './utils/artifactDownloads';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, followPlayhead, revealCursor, loopRange } from './utils/viewUtils';
+import { X, Loader2 } from 'lucide-react';
 
 function App() {
   // --- Audio & Playback State ---
@@ -43,7 +47,12 @@ function App() {
     reset: resetHistory, 
     canUndo, 
     canRedo 
-  } = useUndoRedo<{pitchData: PitchFrame[], notes: Note[]}>({ pitchData: [], notes: [] });
+  } = useUndoRedo<{pitchData: PitchFrame[], notes: Note[], segmentLayers: SegmentLayer[]}>({ pitchData: [], notes: [], segmentLayers: [] });
+
+  // Segment layers (lyrics, speakers, ...): which lane receives new segments, and the selected / edited segment
+  const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
+  const [selectedSegment, setSelectedSegment] = useState<SegmentRef | null>(null);
+  const [editingSegment, setEditingSegment] = useState<SegmentRef | null>(null);
 
   // Separate loading state (not part of history)
   const [analysisStatus, setAnalysisStatus] = useState({ isAnalyzing: false, progress: 0 });
@@ -78,6 +87,7 @@ function App() {
   const [saveFileNameInput, setSaveFileNameInput] = useState("");
   const [locateModalOpen, setLocateModalOpen] = useState(false);
   const [pendingProjectData, setPendingProjectData] = useState<any | null>(null);
+  const [locatingFile, setLocatingFile] = useState<string | null>(null); // audio being decoded for a project
   const [projectHandle, setProjectHandle] = useState<any | null>(null);
   
   const animationFrameRef = useRef<number | null>(null);
@@ -110,6 +120,40 @@ function App() {
     if (v !== viewStartTime) setViewStartTime(v);
   }, [zoom, viewStartTime, viewportWidth, duration]);
 
+  // Follow the cursor when it is moved by hand near the right edge or off screen.
+  // While a button is held (dragging a selection, note or the minimap) wait for the release,
+  // so the view never moves under the pointer.
+  const pointerDownRef = useRef(false);
+  const revealPendingRef = useRef(false);
+  const skipRevealRef = useRef(false); // set by actions that place the cursor deliberately
+  const revealCursorNow = useCallback(() => {
+    const s = stateRef.current;
+    if (skipRevealRef.current) { skipRevealRef.current = false; return; }
+    if (s.isPlaying || s.duration <= 0) return;
+    const next = clampViewStart(revealCursor(s.currentTime, s.viewStartTime, s.zoom, s.viewportWidth), s.zoom, s.viewportWidth, s.duration);
+    if (next !== s.viewStartTime) setViewStartTime(next);
+  }, []);
+  useEffect(() => {
+    if (isPlaying) return;
+    if (pointerDownRef.current) revealPendingRef.current = true;
+    else revealCursorNow();
+  }, [currentTime, isPlaying, revealCursorNow]);
+  useEffect(() => {
+    const down = () => { pointerDownRef.current = true; revealPendingRef.current = false; };
+    const up = () => {
+      pointerDownRef.current = false;
+      if (revealPendingRef.current) { revealPendingRef.current = false; revealCursorNow(); }
+    };
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    return () => {
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+    };
+  }, [revealCursorNow]);
+
   useEffect(() => {
     const handleResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', handleResize);
@@ -135,24 +179,25 @@ function App() {
     const time = audioService.getCurrentTime();
     
     // Check Loop
-    if (state.isLooping && state.selectionRange) {
-      if (time >= state.selectionRange[1]) {
-        const loopDuration = state.selectionRange[1] - state.selectionRange[0];
+    const loop = loopRange(state);
+    if (loop) {
+      if (time >= loop[1]) {
+        const loopDuration = loop[1] - loop[0];
         audioService.stop(); 
         try {
             audioService.play(
                 state.audioBuffer!, 
                 state.pitchData, 
                 state.notes, 
-                state.selectionRange[0], 
+                loop[0], 
                 loopDuration, 
                 state.playbackSpeed // Pass speed
             );
         } catch(e) { console.error("Loop restart failed", e); }
         
-        setCurrentTime(state.selectionRange[0]);
+        setCurrentTime(loop[0]);
         // Keep loop start in view without jumping when it is already visible
-        setViewStartTime(followPlayhead(state.selectionRange[0], state.viewStartTime, state.zoom, state.viewportWidth));
+        setViewStartTime(followPlayhead(loop[0], state.viewStartTime, state.zoom, state.viewportWidth));
         
         animationFrameRef.current = requestAnimationFrame(updateLoop);
         return;
@@ -189,7 +234,7 @@ function App() {
 
   // --- Logic Handlers ---
 
-  const runPitchAnalysis = async (buffer: AudioBuffer) => {
+  const runPitchAnalysis = async (buffer: AudioBuffer, segmentLayers: SegmentLayer[] = []) => {
     setAnalysisStatus({ isAnalyzing: true, progress: 0 });
     try {
       const channelData = buffer.getChannelData(0);
@@ -197,7 +242,7 @@ function App() {
         setAnalysisStatus(prev => ({ ...prev, progress: p }));
       });
       setAnalysisStatus({ isAnalyzing: false, progress: 1 });
-      resetHistory({ pitchData: frames, notes: [] });
+      resetHistory({ pitchData: frames, notes: [], segmentLayers });
 
       // Trigger Spectrogram generation in background
       generateSpectrogram(buffer).then(data => {
@@ -238,26 +283,38 @@ function App() {
       const buffer = await loadAudio(file);
       if (buffer) {
           setAnalysisStatus({ isAnalyzing: false, progress: 0 });
-          resetHistory({ pitchData: [], notes: [] });
+          resetHistory({ pitchData: [], notes: [], segmentLayers: [] });
+          setActiveLayerId(null);
+          setSelectedSegment(null);
+          setEditingSegment(null);
           runPitchAnalysis(buffer);
       }
     }
   }, [resetHistory]);
 
-  const handleLocateAudio = useCallback(async (file: File) => {
-     if (!file || !pendingProjectData) return;
-     const buffer = await loadAudio(file);
-     if (buffer) {
-         applyProjectData(pendingProjectData, buffer);
+  const openProjectWithAudio = async (data: any, file: File) => {
+     setPendingProjectData(data);
+     setLocateModalOpen(true);
+     setLocatingFile(file.name);
+     try {
+         const buffer = await loadAudio(file);
+         if (!buffer) return;
+         applyProjectData(data, buffer);
          setPendingProjectData(null);
          setLocateModalOpen(false);
-         
+
          // Trigger Spectrogram generation for located audio
          generateSpectrogram(buffer).then(data => {
              setSpectrogramData(data);
          }).catch(e => console.error("Spectrogram generation failed", e));
+     } finally {
+         setLocatingFile(null);
      }
-  }, [pendingProjectData]);
+  };
+
+  const handleLocateAudio = (file: File) => {
+     if (file && pendingProjectData && !locatingFile) openProjectWithAudio(pendingProjectData, file);
+  };
 
   const handleSelectionChange = useCallback((range: [number, number] | null) => {
     if (range && audioBuffer) {
@@ -273,6 +330,7 @@ function App() {
             setSelectedNoteId(null); // Clear selected note on click outside
         }
     }
+    setSelectedSegment(null);
   }, [audioBuffer]);
 
   // Helper to start playback using current state ref (avoids closure staleness)
@@ -283,8 +341,9 @@ function App() {
       if (Math.abs(state.duration - startTime) < 0.1) startTime = 0;
 
       let playDuration = undefined;
-      if (state.isLooping && state.selectionRange) {
-        const [start, end] = state.selectionRange;
+      const loop = loopRange(state);
+      if (loop) {
+        const [start, end] = loop;
         // If cursor is outside loop, jump to start
         if (startTime < start || startTime >= end) startTime = start;
         playDuration = end - startTime;
@@ -308,6 +367,33 @@ function App() {
       setCurrentTime(startTime); 
       setIsPlaying(true);
   };
+
+  // When the selection (loop) changes during playback, restart on the new range; otherwise the
+  // audio stops at the old selection's end while the playhead runs on to the new end in silence.
+  // While a button is held (dragging the selection) wait for the release.
+  const restartPendingRef = useRef(false);
+  const restartForSelection = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.isPlaying || !s.audioBuffer) return;
+    audioService.stop();
+    playInternal({ ...s, currentTime: audioService.currentTime });
+  }, []);
+  const lastLoopRef = useRef<string>('');
+  useEffect(() => {
+    const key = isLooping && selectionRange ? `${selectionRange[0]}-${selectionRange[1]}` : '';
+    if (key === lastLoopRef.current) return;
+    lastLoopRef.current = key;
+    if (!stateRef.current.isPlaying) return;
+    if (pointerDownRef.current) restartPendingRef.current = true;
+    else restartForSelection();
+  }, [selectionRange, isLooping, restartForSelection]);
+  useEffect(() => {
+    const up = () => {
+      if (restartPendingRef.current) { restartPendingRef.current = false; restartForSelection(); }
+    };
+    window.addEventListener('pointerup', up);
+    return () => window.removeEventListener('pointerup', up);
+  }, [restartForSelection]);
 
   // --- Playback Controls ---
   const handlePlayPause = useCallback(() => {
@@ -343,11 +429,8 @@ function App() {
     if (state.isPlaying) {
       audioService.stop();
       let playDuration = undefined;
-      if (state.isLooping && state.selectionRange) {
-          if (target >= state.selectionRange[0] && target < state.selectionRange[1]) {
-              playDuration = state.selectionRange[1] - target;
-          }
-      }
+      const loop = loopRange(state);
+      if (loop && target >= loop[0] && target < loop[1]) playDuration = loop[1] - target;
       try {
         audioService.play(
             state.audioBuffer, 
@@ -379,9 +462,8 @@ function App() {
         let playDuration = undefined;
         let startTime = state.currentTime;
         
-        if (state.isLooping && state.selectionRange) {
-            playDuration = state.selectionRange[1] - startTime;
-        }
+        const loop = loopRange(state);
+        if (loop) playDuration = loop[1] - startTime;
 
         try {
             audioService.play(state.audioBuffer, state.pitchData, state.notes, startTime, playDuration, speed);
@@ -392,7 +474,8 @@ function App() {
 
   const handleExtractPitch = async () => {
     if (!audioBuffer) return;
-    runPitchAnalysis(audioBuffer);
+    // Re-extracting pitch replaces notes but keeps segment layers
+    runPitchAnalysis(audioBuffer, analysis.segmentLayers);
   };
 
   // --- Recalculate Logic ---
@@ -425,7 +508,7 @@ function App() {
             .map(f => ({ ...f, timestamp: f.timestamp + offset }))
             .filter(f => f.timestamp >= start && f.timestamp <= end);
 
-        commitHistory({ pitchData: [...filtered, ...validNew].sort((a, b) => a.timestamp - b.timestamp), notes: analysis.notes });
+        commitHistory({ ...analysis, pitchData: [...filtered, ...validNew].sort((a, b) => a.timestamp - b.timestamp) });
         setShowCandidates(true);
     } catch (e) { console.error(e); } finally { setIsRecalculating(false); }
   };
@@ -443,6 +526,21 @@ function App() {
   };
 
   const saveFileAs = useCallback(async (content: string, defaultName: string, type: string, ext: string, desc: string, forceNew = false) => {
+      // 0. Inside a claude.ai artifact preview, save through the viewer
+      const artifactDownloads = await getArtifactDownloads();
+      if (artifactDownloads) {
+          const filename = artifactFilename(defaultName);
+          try {
+              await artifactDownloads.save({ filename, data: new Blob([content]) });
+              if (filename !== defaultName && !filename.endsWith('.json')) {
+                  alert(`Saved as "${filename}". Remove the ".txt" ending to open it in other programs.`);
+              }
+          } catch (err: any) {
+              if (err?.code !== 'declined') alert(`Could not save the file (${err?.code ?? err}).`);
+          }
+          return;
+      }
+
       // 1. If we have a project handle and we are Saving (not Save As), overwrite it
       if (!forceNew && projectHandle && type === 'application/json' && 'showSaveFilePicker' in window) {
            try {
@@ -488,7 +586,7 @@ function App() {
     try {
         const viewState = { zoom, viewStartTime, currentTime, selectionRange };
         const settings = { isLooping, playbackSpeed, showSpectrogram, showPitch, showNotes, mixerState };
-        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings);
+        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings, analysis.segmentLayers);
         const name = (fileName || "project").replace(/\.[^/.]+$/, "");
         await saveFileAs(json, `${name}.tonyweb`, 'application/json', '.tonyweb', 'Tony Web Project');
     } catch(e) { console.error(e); alert("Failed to save."); }
@@ -499,7 +597,7 @@ function App() {
     try {
         const viewState = { zoom, viewStartTime, currentTime, selectionRange };
         const settings = { isLooping, playbackSpeed, showSpectrogram, showPitch, showNotes, mixerState };
-        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings);
+        const json = generateProjectJSON(fileName || "project", audioBuffer.sampleRate, analysis.pitchData, analysis.notes, viewState, settings, analysis.segmentLayers);
         const name = (fileName || "project").replace(/\.[^/.]+$/, "");
         await saveFileAs(json, `${name}.tonyweb`, 'application/json', '.tonyweb', 'Tony Web Project', true);
     } catch(e) { console.error(e); alert("Failed to save."); }
@@ -529,7 +627,11 @@ function App() {
     const sr = buffer.sampleRate;
     const snappedPitch = data.pitchData.map((f: PitchFrame) => ({...f, timestamp: snapTime(f.timestamp, sr)}));
     const snappedNotes = data.notes.map((n: Note) => ({...n, start: snapTime(n.start, sr), end: snapTime(n.end, sr)}));
-    resetHistory({ pitchData: snappedPitch, notes: snappedNotes });
+    const segmentLayers: SegmentLayer[] = Array.isArray(data.segmentLayers) ? data.segmentLayers : [];
+    resetHistory({ pitchData: snappedPitch, notes: snappedNotes, segmentLayers });
+    setActiveLayerId(segmentLayers[0]?.id ?? null);
+    setSelectedSegment(null);
+    setEditingSegment(null);
     
     // Restore View State
     if (data.viewState) {
@@ -551,10 +653,18 @@ function App() {
 
   }, [resetHistory]);
 
-  const handleLoadProject = async (file: File) => {
-    const data = parseProjectJSON(await file.text());
+  // Browsers can't read other files in the project's folder, so the audio can be picked
+  // together with the project; otherwise the user is asked to locate it.
+  const handleLoadProject = async (files: File[]) => {
+    const isProject = (f: File) => /\.(json|tonyweb)$/i.test(f.name);
+    const projectFile = files.find(isProject);
+    if (!projectFile) { alert("Please select a project file (.tonyweb or .json)"); return; }
+    const data = parseProjectJSON(await projectFile.text());
     if (!data) { alert("Invalid project file"); return; }
-    if (audioBuffer && fileName === data.fileName) applyProjectData(data, audioBuffer);
+    const audioFiles = files.filter(f => !isProject(f) && (f.type.startsWith('audio/') || /\.(wav|mp3|flac|ogg|oga|m4a|aac|aiff?|webm|opus)$/i.test(f.name)));
+    const audioFile = audioFiles.find(f => f.name === data.fileName) ?? audioFiles[0];
+    if (audioFile) openProjectWithAudio(data, audioFile);
+    else if (audioBuffer && fileName === data.fileName) applyProjectData(data, audioBuffer);
     else { setPendingProjectData(data); setLocateModalOpen(true); }
   };
 
@@ -582,7 +692,7 @@ function App() {
     const [start, end] = selectionRange;
     let hasChanged = false;
     const newData = analysis.pitchData.map(frame => {
-        if (frame.timestamp >= start && frame.timestamp <= end && frame.candidates?.length) {
+        if (isFrameInRange(frame.timestamp, start, end) && frame.candidates?.length) {
             const sorted = [...frame.candidates].sort((a, b) => a.frequency - b.frequency);
             const currIdx = sorted.findIndex(c => Math.abs(c.frequency - frame.frequency) < 0.1);
             let newIdx = currIdx;
@@ -610,7 +720,7 @@ function App() {
     const [start, end] = selectionRange;
     let hasChanged = false;
     const newData = analysis.pitchData.map(f => {
-        if (f.timestamp >= start && f.timestamp <= end && (f.hasPitch || f.frequency > 0)) {
+        if (isFrameInRange(f.timestamp, start, end) && (f.hasPitch || f.frequency > 0)) {
             hasChanged = true;
             return { ...f, frequency: 0, hasPitch: false };
         }
@@ -621,17 +731,17 @@ function App() {
 
   const handleCreateNote = useCallback(() => {
     if (!selectionRange) return;
-    const [start, end] = selectionRange;
-    const filteredNotes = analysis.notes.filter(n => !((n.start + n.end)/2 >= start && (n.start + n.end)/2 <= end));
+    const { kept: filteredNotes, range } = placeNewNote(analysis.notes, selectionRange[0], selectionRange[1]);
+    if (!range) return; // no room: the selection lies inside another note
+    const [start, end] = range;
     const frames = analysis.pitchData.filter(f => f.timestamp >= start && f.timestamp <= end);
-    const pitch = calculateMedianPitch(frames);
-    
-    if (pitch > 0) {
-        const newNote: Note = { id: crypto.randomUUID(), start, end, pitch, state: 'default' };
-        commitHistory({ ...analysis, notes: [...filteredNotes, newNote] });
-    } else if (filteredNotes.length !== analysis.notes.length) {
-        commitHistory({ ...analysis, notes: filteredNotes });
-    }
+    // Without f0 in the range the note still gets made, at a pitch taken from its surroundings
+    const pitch = calculateMedianPitch(frames) || fallbackNotePitch(filteredNotes, analysis.pitchData, start, end);
+    const newNote: Note = { id: crypto.randomUUID(), start, end, pitch, state: 'default' };
+    commitHistory({ ...analysis, notes: [...filteredNotes, newNote] });
+    // Edits now go to the new note (split, delete), not to a segment that set the selection
+    setSelectedSegment(null);
+    setSelectedNoteId(newNote.id);
   }, [selectionRange, analysis, commitHistory]);
 
   const handleDeleteNotes = useCallback(() => {
@@ -662,13 +772,21 @@ function App() {
   const handleNoteSelect = useCallback((noteId: string) => {
      const note = analysis.notes.find(n => n.id === noteId);
      if (note && audioBuffer) {
-        // 1. Calculate Context Selection (e.g. Note + 2 seconds or neighboring notes)
-        const range = getNoteContextRange(note, 2.0); // 2 seconds context
+        // 1. Context selection around the note, scaled to the view (a fifth of the visible
+        //    time on each side, at most 2 s) and kept on screen, so the view never jumps
+        const s = stateRef.current;
+        const viewDuration = s.viewportWidth / s.zoom;
+        const padded = getNoteContextRange(note, Math.min(2.0, viewDuration * 0.2));
+        const range: [number, number] = [
+            Math.max(padded[0], Math.min(s.viewStartTime, note.start)),
+            Math.min(padded[1], s.duration, Math.max(s.viewStartTime + viewDuration, note.end)),
+        ];
         setSelectionRange(range);
         setIsLooping(true);
         // 2. Lock Note
         setSelectedNoteId(noteId);
-        // 3. Move playhead to start of selection
+        // 3. Move playhead to start of selection, without scrolling the view
+        skipRevealRef.current = range[0] !== s.currentTime;
         setCurrentTime(range[0]);
      }
   }, [analysis.notes, audioBuffer]);
@@ -707,6 +825,139 @@ function App() {
     }
   };
 
+  // --- Segment Layers ---
+  const handleSegmentLayersChange = useCallback((segmentLayers: SegmentLayer[]) => {
+    commitHistory({ ...analysis, segmentLayers });
+  }, [analysis, commitHistory]);
+
+  const handleAddLayer = useCallback(() => {
+    const layer = createLayer(analysis.segmentLayers);
+    commitHistory({ ...analysis, segmentLayers: [...analysis.segmentLayers, layer] });
+    setActiveLayerId(layer.id);
+    return layer.id;
+  }, [analysis, commitHistory]);
+
+  // A segment being drawn or resized shows as the time selection in the pitch view
+  const handlePreviewSelection = useCallback((range: [number, number]) => {
+    setSelectedNoteId(null);
+    setSelectionRange(range);
+    setIsLooping(true);
+  }, []);
+
+  // Selecting a segment selects its time range, so Space loops it (handy while transcribing)
+  const handleSelectSegment = useCallback((ref: SegmentRef | null) => {
+    setSelectedSegment(ref);
+    if (!ref) return;
+    setActiveLayerId(ref.layerId);
+    const seg = analysis.segmentLayers.find(l => l.id === ref.layerId)?.segments.find(s => s.id === ref.segmentId);
+    if (seg) {
+        setSelectedNoteId(null);
+        setSelectionRange([seg.start, seg.end]);
+        setIsLooping(true);
+        // If the segment is not fully on screen, centre it, zooming out first if it does not fit
+        // (it then fills 80% of the view). A visible segment stays put, so double-clicks land.
+        const s = stateRef.current;
+        const visibleEnd = s.viewStartTime + s.viewportWidth / s.zoom;
+        if (seg.start < s.viewStartTime || seg.end > visibleEnd) {
+            const fitZoom = clampZoom(Math.min(s.zoom, (s.viewportWidth * 0.8) / (seg.end - seg.start)), s.viewportWidth, s.duration);
+            const viewDuration = s.viewportWidth / fitZoom;
+            if (fitZoom !== s.zoom) setZoom(fitZoom);
+            setViewStartTime(clampViewStart((seg.start + seg.end) / 2 - viewDuration / 2, fitZoom, s.viewportWidth, s.duration));
+        }
+        if (!s.isPlaying) {
+            skipRevealRef.current = seg.start !== s.currentTime;
+            setCurrentTime(seg.start);
+        }
+    }
+  }, [analysis.segmentLayers]);
+
+  const getSelectedSegment = () => {
+    if (!selectedSegment) return null;
+    const layer = analysis.segmentLayers.find(l => l.id === selectedSegment.layerId);
+    const segment = layer?.segments.find(s => s.id === selectedSegment.segmentId);
+    return layer && segment ? { layer, segment } : null;
+  };
+
+  // Enter: label the selected segment, or turn the time selection into a segment in the active layer
+  const handleSegmentEnter = useCallback(() => {
+    if (getSelectedSegment()) { setEditingSegment(selectedSegment); return; }
+    if (!selectionRange || !duration) return;
+    let layers = analysis.segmentLayers;
+    let layer = layers.find(l => l.id === activeLayerId) ?? layers[0];
+    if (!layer) {
+        layer = createLayer(layers);
+        layers = [...layers, layer];
+    }
+    const result = addSegment(layer, selectionRange[0], selectionRange[1], duration);
+    if (!result) return;
+    commitHistory({ ...analysis, segmentLayers: layers.map(l => l.id === layer!.id ? result.layer : l) });
+    const ref = { layerId: layer.id, segmentId: result.segment.id };
+    setActiveLayerId(layer.id);
+    setSelectedSegment(ref);
+    setEditingSegment(ref);
+  }, [selectedSegment, selectionRange, duration, analysis, activeLayerId, commitHistory]);
+
+  const handleDelete = useCallback(() => {
+    const sel = getSelectedSegment();
+    if (sel) {
+        commitHistory({ ...analysis, segmentLayers: analysis.segmentLayers.map(l => l.id === sel.layer.id ? deleteSegment(l, sel.segment.id) : l) });
+        setSelectedSegment(null);
+        return;
+    }
+    handleDeleteNotes();
+  }, [selectedSegment, analysis, commitHistory, handleDeleteNotes]);
+
+  const handleSplit = useCallback(() => {
+    const sel = getSelectedSegment();
+    if (sel && currentTime > sel.segment.start && currentTime < sel.segment.end) {
+        const layer = splitSegment(sel.layer, sel.segment.id, currentTime);
+        if (layer) commitHistory({ ...analysis, segmentLayers: analysis.segmentLayers.map(l => l.id === layer.id ? layer : l) });
+        return;
+    }
+    handleSplitNote();
+  }, [selectedSegment, currentTime, analysis, commitHistory, handleSplitNote]);
+
+  const handleExportSegmentsCSV = useCallback(async () => {
+    if (analysis.segmentLayers.length === 0) { alert("No segment layers to export."); return; }
+    const name = (fileName || "track").replace(/\.[^/.]+$/, "");
+    await saveFileAs(generateSegmentsCSV(analysis.segmentLayers), `${name}_segments.csv`, 'text/csv', '.csv', 'Segments CSV');
+  }, [analysis.segmentLayers, fileName, saveFileAs]);
+
+  const handleExportTextGrid = useCallback(async () => {
+    if (analysis.segmentLayers.length === 0) { alert("No segment layers to export."); return; }
+    const name = (fileName || "track").replace(/\.[^/.]+$/, "");
+    await saveFileAs(generateTextGrid(analysis.segmentLayers, duration), `${name}.TextGrid`, 'text/plain', '.TextGrid', 'Praat TextGrid');
+  }, [analysis.segmentLayers, duration, fileName, saveFileAs]);
+
+  const handleExportSegmentSVL = useCallback(async () => {
+    if (!audioBuffer) return;
+    const layer = analysis.segmentLayers.find(l => l.id === activeLayerId) ?? analysis.segmentLayers[0];
+    if (!layer) { alert("No segment layers to export."); return; }
+    const name = (fileName || "track").replace(/\.[^/.]+$/, "");
+    const layerName = layer.name.replace(/[^\w-]+/g, '_');
+    await saveFileAs(generateSegmentSVL(layer, audioBuffer.sampleRate), `${name}_${layerName}.svl`, 'text/xml', '.svl', 'Sonic Visualiser Layer');
+  }, [audioBuffer, analysis.segmentLayers, activeLayerId, fileName, saveFileAs]);
+
+  const handleImportSegments = useCallback(async (file: File) => {
+    const text = await file.text();
+    let imported: SegmentLayer[] = [];
+    try {
+        imported = /\.textgrid$/i.test(file.name) || text.includes('ooTextFile')
+            ? parseTextGrid(text)
+            : parseSegmentsCSV(text, file.name.replace(/\.[^/.]+$/, ""));
+    } catch (e) {
+        console.error(e);
+        alert("Could not read segments from this file.");
+        return;
+    }
+    if (imported.length === 0) { alert("No segments found in this file."); return; }
+    // Recolour so imported layers don't repeat the colours of existing ones
+    const all = [...analysis.segmentLayers];
+    imported.forEach(l => all.push({ ...createLayer(all, l.name), segments: l.segments }));
+    commitHistory({ ...analysis, segmentLayers: all });
+    setActiveLayerId(all[analysis.segmentLayers.length].id);
+  }, [analysis, commitHistory]);
+
   // --- Zoom ---
   const setCenteredZoom = useCallback((requestedZoom: number) => {
      const newZoom = clampZoom(requestedZoom, viewportWidth, duration);
@@ -731,20 +982,63 @@ function App() {
   }, [viewportWidth, duration]);
 
   // --- Initialize Keyboard Shortcuts ---
+  // Shift+Arrow: grow or shrink the selection one f0 frame at a time from the cursor,
+  // so a single wrong frame can be selected and corrected at any zoom
+  const keyboardSelectionRef = useRef<{ anchor: number, focus: number, range: [number, number] } | null>(null);
+  const handleExtendSelection = useCallback((dir: 1 | -1) => {
+    const s = stateRef.current;
+    if (!s.audioBuffer) return;
+    const frame = YIN_HOP_SIZE / s.audioBuffer.sampleRate;
+    let sel = keyboardSelectionRef.current;
+    const current = s.selectionRange;
+    if (!sel || !current || Math.abs(current[0] - sel.range[0]) > 1e-9 || Math.abs(current[1] - sel.range[1]) > 1e-9) {
+        const k = Math.round(s.currentTime / frame);
+        sel = { anchor: k, focus: k, range: [0, 0] };
+    }
+    const maxFrame = Math.floor(s.duration / frame);
+    const focus = Math.max(0, Math.min(maxFrame, sel.focus + dir));
+    if (focus === sel.anchor) {
+        keyboardSelectionRef.current = null;
+        handleSelectionChange(null);
+        return;
+    }
+    const range: [number, number] = [Math.min(sel.anchor, focus) * frame, Math.max(sel.anchor, focus) * frame];
+    keyboardSelectionRef.current = { anchor: sel.anchor, focus, range };
+    setSelectionRange(range);
+    setIsLooping(true);
+    setSelectedSegment(null);
+  }, [handleSelectionChange]);
+
+  const handleEscape = useCallback(() => {
+    setEditingSegment(null);
+    handleSelectionChange(null);
+  }, [handleSelectionChange]);
+
   useKeyboardShortcuts({
     onPlayPause: handlePlayPause,
-    onDeleteNotes: handleDeleteNotes,
+    onDeleteNotes: handleDelete,
     onCreateNote: handleCreateNote,
-    onSplitNote: handleSplitNote,
+    onSplitNote: handleSplit,
+    onSegmentEnter: handleSegmentEnter,
     onToggleCandidates: () => setShowCandidates(p => !p),
     onSaveProject: handleSaveProject,
     onUndo: undo,
     onRedo: redo,
     onPitchCorrection: handlePitchCorrection,
     onSeek: handleSeek,
+    onExtendSelection: handleExtendSelection,
+    onEscape: handleEscape,
     onFitView: handleFitView,
     currentTime: currentTime
   });
+
+  // Segment boundaries snap to note boundaries and the time selection
+  const snapTimes = useMemo(() => {
+    const times: number[] = [];
+    analysis.notes.forEach(n => times.push(n.start, n.end));
+    if (selectionRange) times.push(selectionRange[0], selectionRange[1]);
+    return times;
+  }, [analysis.notes, selectionRange]);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-white text-gray-900 font-sans overflow-hidden">
@@ -759,6 +1053,8 @@ function App() {
         onSaveProject={handleSaveProject} onSaveAsProject={handleSaveAsProject} onLoadProject={handleLoadProject}
         onExportPitchCSV={handleExportPitchCSV} onExportNotesCSV={handleExportNotesCSV} onExportSVL={handleExportSVL}
         onImportPitch={handleImportPitch} onImportNotes={handleImportNotes}
+        onExportSegmentsCSV={handleExportSegmentsCSV} onExportTextGrid={handleExportTextGrid}
+        onExportSegmentSVL={handleExportSegmentSVL} onImportSegments={handleImportSegments}
         isAnalyzing={analysisStatus.isAnalyzing} isRecalculating={isRecalculating}
         hasData={analysis.pitchData.length > 0} fileName={fileName}
         selectionActive={selectionRange !== null} showCandidates={showCandidates}
@@ -791,14 +1087,22 @@ function App() {
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm">
               <div className="bg-white p-6 rounded-lg shadow-2xl w-[450px] border">
                   <h3 className="text-lg font-semibold mb-2">Locate Audio File</h3>
-                  <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 text-sm text-yellow-700">
-                      Project references <strong>{pendingProjectData.fileName}</strong>.<br/>Please manually locate this file.
-                  </div>
+                  {locatingFile ? (
+                      <div className="flex items-center gap-3 bg-blue-50 border-l-4 border-blue-400 p-4 mb-4 text-sm text-blue-800" data-testid="locate-loading">
+                          <Loader2 size={18} className="animate-spin shrink-0" />
+                          <span>Loading <strong>{locatingFile}</strong>…<br/>Long recordings can take a minute to decode.</span>
+                      </div>
+                  ) : (
+                      <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4 text-sm text-yellow-700">
+                          Project references <strong>{pendingProjectData.fileName}</strong>. Please locate this file.
+                          <div className="mt-2 text-xs text-yellow-800">Tip: in Load Project you can select the project and its audio file together.</div>
+                      </div>
+                  )}
                   <div className="flex justify-end gap-3">
-                      <button onClick={() => { setLocateModalOpen(false); setPendingProjectData(null); }} className="px-4 py-2 hover:bg-gray-100 rounded">Cancel</button>
-                      <button onClick={() => fileLocateInputRef.current?.click()} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Locate File...</button>
+                      <button onClick={() => { setLocateModalOpen(false); setPendingProjectData(null); }} disabled={!!locatingFile} className="px-4 py-2 hover:bg-gray-100 rounded disabled:opacity-50">Cancel</button>
+                      <button onClick={() => fileLocateInputRef.current?.click()} disabled={!!locatingFile} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Locate File...</button>
                   </div>
-                  <input ref={fileLocateInputRef} type="file" accept="audio/*" onChange={(e) => { if(e.target.files?.[0]) handleLocateAudio(e.target.files[0]); }} className="hidden" />
+                  <input ref={fileLocateInputRef} type="file" accept="audio/*" onChange={(e) => { if(e.target.files?.[0]) handleLocateAudio(e.target.files[0]); e.target.value = ''; }} className="hidden" />
               </div>
           </div>
       )}
@@ -863,6 +1167,24 @@ function App() {
             </div>
         )}
       </div>
+
+      <SegmentLanes
+        layers={analysis.segmentLayers}
+        duration={duration} zoom={zoom} viewStartTime={viewStartTime} currentTime={currentTime}
+        snapTimes={snapTimes}
+        activeLayerId={activeLayerId}
+        selectedSegment={selectedSegment}
+        editingSegment={editingSegment}
+        onLayersChange={handleSegmentLayersChange}
+        onAddLayer={handleAddLayer}
+        onSetActiveLayer={setActiveLayerId}
+        onSelectSegment={handleSelectSegment}
+        onEditSegment={setEditingSegment}
+        onSeek={handleSeek}
+        onPreviewSelection={handlePreviewSelection}
+        onViewScroll={setViewStartTime}
+        onZoomWheel={handleZoomWheel}
+      />
 
       <div className="flex-none shadow-sm z-10 relative">
         <WaveformNavigator 

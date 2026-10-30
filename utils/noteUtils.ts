@@ -9,6 +9,11 @@ export const snapTime = (time: number, sampleRate: number): number => {
     return Math.round(time / frameDur) * frameDur;
 };
 
+// f0 frames covered by a selection: half-open [start, end), so a selection one frame wide
+// (from one frame to the next) covers exactly one frame
+export const isFrameInRange = (timestamp: number, start: number, end: number) =>
+    timestamp >= start - 1e-9 && timestamp < end - 1e-9;
+
 // Calculate median pitch from frames
 export const calculateMedianPitch = (frames: PitchFrame[]): number => {
   const freqs = frames
@@ -23,6 +28,20 @@ export const calculateMedianPitch = (frames: PitchFrame[]): number => {
       return (freqs[mid - 1] + freqs[mid]) / 2;
   }
   return freqs[mid];
+};
+
+// Starting pitch for a note drawn where there is no f0 (unvoiced or silent): the nearest
+// note's pitch, else the median f0 within a few seconds, else A3. The user then drags it.
+export const fallbackNotePitch = (notes: Note[], pitchData: PitchFrame[], start: number, end: number): number => {
+    let nearest: Note | null = null;
+    let best = Infinity;
+    for (const n of notes) {
+        const gap = n.end <= start ? start - n.end : n.start >= end ? n.start - end : 0;
+        if (gap < best) { best = gap; nearest = n; }
+    }
+    if (nearest) return nearest.pitch;
+    const around = calculateMedianPitch(pitchData.filter(f => f.timestamp >= start - 3 && f.timestamp <= end + 3));
+    return around > 0 ? around : 220;
 };
 
 // Split a note into two at a specific time
@@ -66,6 +85,24 @@ export const splitNote = (
 export const MIN_NOTE_DURATION = 0.01;
 // Boundaries closer than this are treated as shared (touching)
 const TOUCH_EPSILON = 1e-6;
+
+/**
+ * Make room for a note created from a selection. Notes whose middle lies inside the
+ * selection are replaced; the new note is then trimmed to the free gap between the
+ * remaining notes, so notes never overlap. Returns null when there is no room
+ * (e.g. the selection lies inside a longer note).
+ */
+export const placeNewNote = (notes: Note[], start: number, end: number) => {
+    if (notes.some(n => n.start <= start && n.end >= end)) return { kept: notes, range: null };
+    const kept = notes.filter(n => !((n.start + n.end) / 2 >= start && (n.start + n.end) / 2 <= end));
+    let a = start, b = end;
+    for (const n of kept) {
+        if (n.end <= a + TOUCH_EPSILON || n.start >= b - TOUCH_EPSILON) continue;
+        if (n.start <= a) a = n.end;        // overlaps the left end
+        else if (n.end >= b) b = n.start;   // overlaps the right end
+    }
+    return { kept, range: b - a >= MIN_NOTE_DURATION ? [a, b] as [number, number] : null };
+};
 
 /**
  * Move one boundary of a note without ever overlapping its neighbour.

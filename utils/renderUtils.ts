@@ -1,5 +1,6 @@
 
 import { PitchFrame, Note, SpectrogramData } from '../types';
+import { isFrameInRange } from './noteUtils';
 import { COLORS, DIMENSIONS, ANALYSIS } from '../constants';
 
 // Coordinate helpers
@@ -274,11 +275,11 @@ export const drawCandidates = (
       ctx.fillStyle = COLORS.candidate;
       
       let startIdx = 0;
-      while(startIdx < pitchData.length && pitchData[startIdx].timestamp < selStart) startIdx++;
+      while(startIdx < pitchData.length && pitchData[startIdx].timestamp < selStart - 1e-9) startIdx++;
 
       for(let i = startIdx; i < pitchData.length; i++) {
           const frame = pitchData[i];
-          if (frame.timestamp > selEnd) break;
+          if (!isFrameInRange(frame.timestamp, selStart, selEnd)) break;
           if (frame.timestamp < viewStartTime || frame.timestamp > viewStartTime + (visibleWidth/zoom)) continue;
 
           if (frame.candidates) {

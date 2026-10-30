@@ -4,7 +4,7 @@ import { PitchFrame, Note, SpectrogramData } from '../types';
 import { drawSpectrogram, drawGrid, drawNotes, drawPitchCurve, drawCandidates, drawSelection, freqToY, yToFreq, hzToNoteName } from '../utils/renderUtils';
 import { applyNoteResize } from '../utils/noteUtils';
 import { getSnappedTime, findNoteInteraction, isOnNote, InteractionMode } from '../utils/interactionUtils';
-import { wheelDeltaToPixels } from '../utils/viewUtils';
+import { useTimelineWheel } from '../hooks/useTimelineWheel';
 import { DIMENSIONS, COLORS } from '../constants';
 
 interface PitchVisualizerProps {
@@ -33,6 +33,9 @@ interface PitchVisualizerProps {
   onNotePitchChange: (noteId: string, newPitch: number) => void;
   onPitchDragEnd: (noteId: string, newPitch: number) => void;
 }
+
+// Pointer movement below this is a click, not a selection drag
+const CLICK_THRESHOLD_PX = 4;
 
 const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   pitchData,
@@ -106,31 +109,7 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   // Hover Info State
   const [hoveredNoteInfo, setHoveredNoteInfo] = useState<{ onset: number, pitch: number } | null>(null);
 
-  // Wheel: native non-passive listener so preventDefault works (React's onWheel is passive).
-  // Vertical wheel zooms around the mouse; horizontal swipe or Shift+wheel pans.
-  const wheelPropsRef = useRef({ zoom, viewStartTime, duration, onZoomWheel, onViewScroll });
-  wheelPropsRef.current = { zoom, viewStartTime, duration, onZoomWheel, onViewScroll };
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const { zoom, viewStartTime, onZoomWheel, onViewScroll } = wheelPropsRef.current;
-      const rect = el.getBoundingClientRect();
-      const dx = wheelDeltaToPixels(e.deltaX, e.deltaMode, rect.width);
-      const dy = wheelDeltaToPixels(e.deltaY, e.deltaMode, rect.height);
-      const panPixels = e.shiftKey ? (dx || dy) : dx;
-      if (Math.abs(panPixels) > Math.abs(e.shiftKey ? 0 : dy)) {
-        onViewScroll(viewStartTime + panPixels / zoom);
-      } else if (dy !== 0) {
-        const mouseTime = viewStartTime + (e.clientX - rect.left) / zoom;
-        onZoomWheel(dy, mouseTime);
-      }
-    };
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, []);
+  useTimelineWheel(containerRef, { zoom, viewStartTime, onZoomWheel, onViewScroll });
 
   const getMouseInfo = (clientX: number, clientY: number) => {
     if (!containerRef.current) return { time: 0, y: 0 };
@@ -157,6 +136,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault(); 
+    // preventDefault keeps focus where it was, so commit any open text field (e.g. a layer name)
+    if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
     
     const { time: rawTime, y: mouseY } = getMouseInfo(e.clientX, e.clientY);
     dragStartRef.current = rawTime;
@@ -246,10 +227,13 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     // Handle Active Interactions
     if (interactionMode !== 'NONE') {
         if (interactionMode === 'SELECTING') {
-            const anchor = selectionAnchorRef.current;
-            const start = Math.min(anchor, snappedTime);
-            const end = Math.max(anchor, snappedTime);
-            onSelectionChange([start, end]);
+            // A click that jitters by a pixel or two is still a click, not a tiny looping selection
+            if (Math.abs(rawTime - dragStartRef.current) >= CLICK_THRESHOLD_PX / zoom) {
+                const anchor = selectionAnchorRef.current;
+                const start = Math.min(anchor, snappedTime);
+                const end = Math.max(anchor, snappedTime);
+                if (end > start) onSelectionChange([start, end]);
+            }
 
         } else if (interactionMode === 'RESIZE_SELECTION_START' && initialSelectionRef.current) {
             const oldEnd = initialSelectionRef.current[1];
@@ -318,8 +302,8 @@ const PitchVisualizer: React.FC<PitchVisualizerProps> = ({
     if (interactionMode === 'SELECTING') {
         const { time } = getMouseInfo(e.clientX, e.clientY);
         const diff = Math.abs(time - dragStartRef.current);
-        if (diff < (3 / zoom)) { 
-             // Click (not drag)
+        if (diff < (CLICK_THRESHOLD_PX / zoom)) {
+             // Click (not drag): keep the selection only when clicking inside it
              if (!selectionRange || (time < selectionRange[0] || time > selectionRange[1])) {
                  onSelectionChange(null);
                  onSeek(time);
