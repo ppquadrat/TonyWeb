@@ -739,6 +739,9 @@ function App() {
     const pitch = calculateMedianPitch(frames) || fallbackNotePitch(filteredNotes, analysis.pitchData, start, end);
     const newNote: Note = { id: crypto.randomUUID(), start, end, pitch, state: 'default' };
     commitHistory({ ...analysis, notes: [...filteredNotes, newNote] });
+    // Edits now go to the new note (split, delete), not to a segment that set the selection
+    setSelectedSegment(null);
+    setSelectedNoteId(newNote.id);
   }, [selectionRange, analysis, commitHistory]);
 
   const handleDeleteNotes = useCallback(() => {
@@ -851,7 +854,20 @@ function App() {
         setSelectedNoteId(null);
         setSelectionRange([seg.start, seg.end]);
         setIsLooping(true);
-        if (!stateRef.current.isPlaying) setCurrentTime(seg.start);
+        // If the segment is not fully on screen, centre it, zooming out first if it does not fit
+        // (it then fills 80% of the view). A visible segment stays put, so double-clicks land.
+        const s = stateRef.current;
+        const visibleEnd = s.viewStartTime + s.viewportWidth / s.zoom;
+        if (seg.start < s.viewStartTime || seg.end > visibleEnd) {
+            const fitZoom = clampZoom(Math.min(s.zoom, (s.viewportWidth * 0.8) / (seg.end - seg.start)), s.viewportWidth, s.duration);
+            const viewDuration = s.viewportWidth / fitZoom;
+            if (fitZoom !== s.zoom) setZoom(fitZoom);
+            setViewStartTime(clampViewStart((seg.start + seg.end) / 2 - viewDuration / 2, fitZoom, s.viewportWidth, s.duration));
+        }
+        if (!s.isPlaying) {
+            skipRevealRef.current = seg.start !== s.currentTime;
+            setCurrentTime(seg.start);
+        }
     }
   }, [analysis.segmentLayers]);
 

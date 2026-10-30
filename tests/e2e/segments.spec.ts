@@ -89,3 +89,41 @@ test('Enter turns a time selection into a segment', async ({ page }, testInfo) =
   await input.press('Enter');
   await expect(page.getByTestId('segment-label')).toHaveText(['Anna']);
 });
+
+test('clicking a partly hidden segment brings it into view; a new note takes over editing', async ({ page }, testInfo) => {
+  await loadAudio(page, writeToneWav(testInfo, [[220, DURATION]]));
+  await page.keyboard.press('KeyF');
+  await page.getByRole('button', { name: 'Segment layer' }).click();
+  await page.keyboard.press('Enter');
+  const c = await laneCoords(page);
+  await dragInLane(page, c.x(2), c.x(4), c.y);
+  await page.getByTestId('segment-label-input').fill('Anna');
+  await page.getByTestId('segment-label-input').press('Enter');
+
+  // Zoom in around t=3 (it stays under the mouse) so the segment runs off both edges
+  await page.mouse.move(c.x(3), c.y);
+  for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -100);
+  const visible = async () => {
+    const track = (await page.getByTestId('minimap').boundingBox())!;
+    const view = (await page.getByTestId('minimap-view').boundingBox())!;
+    const t = (x: number) => ((x - track.x) / track.width) * DURATION;
+    return [t(view.x), t(view.x + view.width)];
+  };
+  const [startBefore, endBefore] = await visible();
+  expect(startBefore).toBeGreaterThan(2);
+  expect(endBefore).toBeLessThan(4);
+
+  // Click the visible part of the segment: the whole segment comes into view
+  await page.mouse.click(c.x(3), c.y);
+  await expect.poll(async () => (await visible())[1]).toBeGreaterThan(4);
+  const [startAfter] = await visible();
+  expect(startAfter).toBeLessThan(2);
+
+  // Make a note from the segment's selection: '/' now splits the note, not the segment
+  await page.keyboard.press('Equal');
+  await page.keyboard.press('KeyF');
+  const view = (await page.getByTestId('pitch-view').boundingBox())!;
+  await page.mouse.click(view.x + 3 * (view.width / DURATION), view.y + view.height - 5);
+  await page.keyboard.press('Slash');
+  await expect(page.getByTestId('segment-label')).toHaveText(['Anna']);
+});
