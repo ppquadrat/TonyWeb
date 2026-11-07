@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Square, ZoomIn, ZoomOut, Upload, Activity, SkipBack, Repeat, Save, Eye, EyeOff, ChevronUp, ChevronDown, RefreshCw, Trash2, Undo2, Redo2, Plus, Scissors, FileText, Download, FolderOpen } from 'lucide-react';
+import { Play, Pause, Square, ZoomIn, ZoomOut, Maximize2, Upload, Activity, SkipBack, Repeat, Save, Eye, EyeOff, ChevronUp, ChevronDown, RefreshCw, Trash2, Undo2, Redo2, Plus, Scissors, FileText, Download, FolderOpen } from 'lucide-react';
 
 interface ControlsProps {
   isPlaying: boolean;
@@ -12,6 +12,7 @@ interface ControlsProps {
   
   onZoomIn: () => void;
   onZoomOut: () => void;
+  onZoomFit: () => void;
   onFileLoad: (file: File) => void;
   onExtractPitch: () => void;
   
@@ -60,6 +61,7 @@ const Controls: React.FC<ControlsProps> = ({
   onToggleLoop,
   onZoomIn,
   onZoomOut,
+  onZoomFit,
   onFileLoad,
   onExtractPitch,
   onSaveProject,
@@ -404,6 +406,13 @@ const Controls: React.FC<ControlsProps> = ({
             title="Zoom In"
         >
             <ZoomIn size={20} />
+        </button>
+        <button 
+            onClick={(e) => handleAction(onZoomFit, e)}
+            className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-600 focus:outline-none"
+            title="Fit Whole File (F)"
+        >
+            <Maximize2 size={20} />
         </button>
       </div>
     </div>

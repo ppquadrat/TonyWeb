@@ -55,6 +55,21 @@ export interface NoteInteractionResult {
     pitch: number;
 }
 
+// Edge grab zone for a note: never more than a quarter of the note's width,
+// so even short notes keep a body that can be grabbed.
+export const getEdgeThreshold = (note: Note, zoom: number) => {
+    const handleThreshold = DIMENSIONS.handleThresholdPx / zoom;
+    return Math.min(handleThreshold, (note.end - note.start) / 4);
+};
+
+// Is the point on the note (time within the note, y within the note's hit height)?
+export const isOnNote = (rawTime: number, mouseY: number, note: Note, containerHeight: number) => {
+    const noteY = freqToY(note.pitch, containerHeight);
+    const inTime = rawTime >= note.start && rawTime <= note.end;
+    const inPitch = Math.abs(mouseY - noteY) < DIMENSIONS.noteInteractionHeight / 2;
+    return inTime && inPitch;
+};
+
 export const findNoteInteraction = (
     rawTime: number, 
     mouseY: number, 
@@ -63,15 +78,31 @@ export const findNoteInteraction = (
     containerHeight: number, 
     selectedNoteId: string | null
 ): NoteInteractionResult | null => {
-      const handleThreshold = DIMENSIONS.handleThresholdPx / zoom; 
       const NOTE_HALF_HEIGHT = DIMENSIONS.noteInteractionHeight / 2; 
 
-      // PRIORITY 1: Note Starts (Onsets)
+      // PRIORITY 1: Body of the selected note (vertical pitch move).
+      // Checked first so that edges of the note or its neighbours can't steal the grab.
+      if (selectedNoteId) {
+          const selectedNote = notes.find(n => n.id === selectedNoteId);
+          if (selectedNote && isOnNote(rawTime, mouseY, selectedNote, containerHeight)) {
+              const edge = getEdgeThreshold(selectedNote, zoom);
+              if (rawTime > selectedNote.start + edge && rawTime < selectedNote.end - edge) {
+                  return {
+                      mode: 'MOVE_VERTICAL',
+                      noteId: selectedNote.id,
+                      bounds: [selectedNote.start, selectedNote.end],
+                      pitch: selectedNote.pitch
+                  };
+              }
+          }
+      }
+
+      // PRIORITY 2: Note Starts (Onsets)
       for (const note of notes) {
         const noteY = freqToY(note.pitch, containerHeight);
         if (Math.abs(mouseY - noteY) > NOTE_HALF_HEIGHT) continue; 
 
-        if (Math.abs(rawTime - note.start) < handleThreshold) {
+        if (Math.abs(rawTime - note.start) < getEdgeThreshold(note, zoom)) {
             return {
                 mode: 'RESIZE_NOTE_START',
                 noteId: note.id,
@@ -81,12 +112,12 @@ export const findNoteInteraction = (
         }
       }
 
-      // PRIORITY 2: Note Ends (Offsets)
+      // PRIORITY 3: Note Ends (Offsets)
       for (const note of notes) {
         const noteY = freqToY(note.pitch, containerHeight);
         if (Math.abs(mouseY - noteY) > NOTE_HALF_HEIGHT) continue; 
 
-        if (Math.abs(rawTime - note.end) < handleThreshold) {
+        if (Math.abs(rawTime - note.end) < getEdgeThreshold(note, zoom)) {
             return {
                 mode: 'RESIZE_NOTE_END',
                 noteId: note.id,
@@ -94,25 +125,6 @@ export const findNoteInteraction = (
                 pitch: note.pitch
             };
         }
-      }
-
-      // PRIORITY 3: Note Body (ONLY if selected) for Vertical Move
-      if (selectedNoteId) {
-          const selectedNote = notes.find(n => n.id === selectedNoteId);
-          if (selectedNote) {
-              const noteY = freqToY(selectedNote.pitch, containerHeight);
-              const inTime = rawTime >= selectedNote.start && rawTime <= selectedNote.end;
-              const inPitch = Math.abs(mouseY - noteY) < NOTE_HALF_HEIGHT;
-              
-              if (inTime && inPitch) {
-                  return {
-                      mode: 'MOVE_VERTICAL',
-                      noteId: selectedNote.id,
-                      bounds: [selectedNote.start, selectedNote.end],
-                      pitch: selectedNote.pitch
-                  };
-              }
-          }
       }
 
       return null;
