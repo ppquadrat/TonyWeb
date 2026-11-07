@@ -3,6 +3,7 @@
 import { MixerState, PitchFrame, Note } from "../types";
 
 const PLAYBACK_LEAD = 0.05; // Seconds between pressing play and the scheduled start
+const NOTE_EDGE_TOLERANCE = 0.01; // Notes overlapping the played range by less than this are skipped
 const SCHEDULE_AHEAD = 5; // Seconds of synth events scheduled ahead of the playhead
 const SCHEDULER_INTERVAL_MS = 500;
 
@@ -184,12 +185,10 @@ export class AudioService {
 
     this.source.connect(this.originalGain);
     
-    // source.start takes (when, offset, duration)
-    if (duration !== undefined) {
-      this.source.start(this.anchorTime, startOffset, duration);
-    } else {
-      this.source.start(this.anchorTime, startOffset);
-    }
+    // Start at the anchor and, for a selection, stop at its end. The end is set with stop()
+    // rather than start()'s duration argument, which Firefox has cut short on long files.
+    this.source.start(this.anchorTime, startOffset);
+    if (duration !== undefined) this.source.stop(this.anchorTime + duration / playbackRate);
 
     this.endBufferTime = duration !== undefined ? startOffset + duration : Infinity;
     this.scheduledUntil = startOffset;
@@ -342,11 +341,13 @@ export class AudioService {
 
       for (; this.noteIndex < notes.length; this.noteIndex++) {
           const note = notes[this.noteIndex];
-          if (note.start >= to || note.start > this.endBufferTime) break;
-          if (note.end < this.startOffset) continue;
+          if (note.start >= to || note.start >= this.endBufferTime - NOTE_EDGE_TOLERANCE) break;
+          // Only notes that are really inside the played range: a neighbour that merely
+          // touches the start of a selection (shared boundary) is not played
+          if (note.end <= this.startOffset + NOTE_EDGE_TOLERANCE) continue;
 
           // Map Buffer Time to Context Time with Speed Scaling
-          const noteStartTime = Math.max(now, this.toContextTime(note.start));
+          const noteStartTime = Math.max(now, this.toContextTime(Math.max(note.start, this.startOffset)));
           const noteEndTime = this.toContextTime(Math.min(note.end, this.endBufferTime));
           
           if (noteEndTime < now) continue;

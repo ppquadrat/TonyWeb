@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, wheelDeltaToPixels, followPlayhead } from '../../utils/viewUtils';
+import { clampViewStart, clampZoom, getMinZoom, wheelZoomFactor, wheelDeltaToPixels, followPlayhead, revealCursor, loopRange } from '../../utils/viewUtils';
 
 describe('viewUtils', () => {
   it('keeps the view start inside the audio', () => {
@@ -38,5 +38,25 @@ describe('viewUtils', () => {
     expect(followPlayhead(5, 0, 100, 1000)).toBe(0);
     expect(followPlayhead(9.5, 0, 100, 1000)).toBeCloseTo(8.5);
     expect(followPlayhead(2, 4, 100, 1000)).toBeCloseTo(1);
+  });
+
+  it('scrolls to a hand-moved cursor only near the right edge or off screen', () => {
+    // 10s visible from 0
+    expect(revealCursor(5, 0, 100, 1000)).toBe(0);
+    expect(revealCursor(8, 0, 100, 1000)).toBe(0);
+    expect(revealCursor(9, 0, 100, 1000)).toBeCloseTo(6);
+    expect(revealCursor(14, 0, 100, 1000)).toBeCloseTo(11);
+    // Near or past the left edge: two thirds of the way in, so there is room to keep going left
+    expect(revealCursor(20.5, 20, 100, 1000)).toBeCloseTo(13.5);
+    expect(revealCursor(15, 20, 100, 1000)).toBeCloseTo(8);
+    expect(revealCursor(21.5, 20, 100, 1000)).toBe(20);
+    // At the very start there is nothing to the left
+    expect(revealCursor(0.5, 0, 100, 1000)).toBe(0);
+  });
+
+  it('does not loop a selection too short to hear', () => {
+    expect(loopRange({ isLooping: true, selectionRange: [10, 10.004] })).toBeNull();
+    expect(loopRange({ isLooping: false, selectionRange: [10, 12] })).toBeNull();
+    expect(loopRange({ isLooping: true, selectionRange: [10, 12] })).toEqual([10, 12]);
   });
 });

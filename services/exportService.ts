@@ -1,5 +1,5 @@
 
-import { PitchFrame, Note, MixerState } from '../types';
+import { PitchFrame, Note, MixerState, SegmentLayer } from '../types';
 
 /**
  * TONY CSV FORMATS:
@@ -36,14 +36,16 @@ export const generateProjectJSON = (
     pitchData: PitchFrame[],
     notes: Note[],
     viewState?: ProjectViewState,
-    settings?: ProjectSettings
+    settings?: ProjectSettings,
+    segmentLayers: SegmentLayer[] = []
 ) => {
     return JSON.stringify({
-        version: "1.2",
+        version: "1.3",
         fileName,
         sampleRate,
         pitchData,
         notes,
+        segmentLayers,
         viewState,
         settings
     }, null, 2);

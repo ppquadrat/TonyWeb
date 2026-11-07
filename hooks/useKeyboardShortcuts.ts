@@ -6,12 +6,15 @@ interface KeyboardShortcutsProps {
   onDeleteNotes: () => void;
   onCreateNote: () => void;
   onSplitNote: () => void;
+  onSegmentEnter: () => void;
   onToggleCandidates: () => void;
   onSaveProject: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onPitchCorrection: (dir: 'up' | 'down') => void;
   onSeek: (time: number) => void;
+  onExtendSelection: (dir: 1 | -1) => void; // Shift+Arrow: select f0 frame by frame
+  onEscape: () => void;
   onFitView: () => void;
   currentTime: number;
 }
@@ -21,12 +24,15 @@ export const useKeyboardShortcuts = ({
   onDeleteNotes,
   onCreateNote,
   onSplitNote,
+  onSegmentEnter,
   onToggleCandidates,
   onSaveProject,
   onUndo,
   onRedo,
   onPitchCorrection,
   onSeek,
+  onExtendSelection,
+  onEscape,
   onFitView,
   currentTime
 }: KeyboardShortcutsProps) => {
@@ -53,6 +59,11 @@ export const useKeyboardShortcuts = ({
             e.preventDefault(); 
             onCreateNote(); 
             return; 
+        }
+        if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            e.preventDefault();
+            onSegmentEnter();
+            return;
         }
         if (e.key === '/') { 
             e.preventDefault(); 
@@ -102,6 +113,15 @@ export const useKeyboardShortcuts = ({
             onFitView();
             return;
         }
+        if (e.code === 'Escape') {
+            onEscape();
+            return;
+        }
+        if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && e.shiftKey && !e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            onExtendSelection(e.code === 'ArrowRight' ? 1 : -1);
+            return;
+        }
         if (e.code === 'ArrowLeft') { 
             e.preventDefault(); 
             onSeek(currentTime - 0.1); 
@@ -119,12 +139,15 @@ export const useKeyboardShortcuts = ({
     onDeleteNotes, 
     onCreateNote, 
     onSplitNote, 
+    onSegmentEnter,
     onToggleCandidates, 
     onSaveProject, 
     onUndo, 
     onRedo, 
     onPitchCorrection, 
     onSeek, 
+    onExtendSelection,
+    onEscape,
     onFitView,
     currentTime
   ]);

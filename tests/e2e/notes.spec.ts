@@ -74,3 +74,85 @@ test('the view cannot be scrolled or zoomed away from the audio', async ({ page 
   expect(Math.abs(view.x - track.x)).toBeLessThan(3);
   expect(Math.abs(view.width - track.width)).toBeLessThan(3);
 });
+
+test('the view follows the cursor moved near the right edge, but not on other clicks', async ({ page }, testInfo) => {
+  const wav = writeToneWav(testInfo, [[220, 20]]);
+  await loadAudio(page, wav);
+  const box = await viewGeometry(page);
+  await page.mouse.move(box.x + 5, box.y + box.height / 2);
+  for (let i = 0; i < 15; i++) await page.mouse.wheel(0, -100);
+  const viewX = async () => (await page.getByTestId('minimap-view').boundingBox())!.x;
+  const start = await viewX();
+
+  // A click in the middle leaves the view alone
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height - 10);
+  expect(await viewX()).toBeCloseTo(start, 0);
+
+  // A click near the right edge brings the cursor back into the view
+  await page.mouse.click(box.x + box.width * 0.95, box.y + box.height - 10);
+  await expect.poll(viewX).toBeGreaterThan(start + 2);
+
+  // Arrow keys past the right edge keep it in view
+  const after = await viewX();
+  for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowRight');
+  await expect.poll(viewX).toBeGreaterThan(after);
+
+  // ...and going back left with the arrow keys follows too
+  const right = await viewX();
+  for (let i = 0; i < 40; i++) await page.keyboard.press('ArrowLeft');
+  await expect.poll(viewX).toBeLessThan(right);
+});
+
+test('a click that jitters by a pixel or two does not make a looping selection', async ({ page }, testInfo) => {
+  const wav = writeToneWav(testInfo, [[220, 20]]);
+  await loadAudio(page, wav);
+  const box = await viewGeometry(page);
+  const x = box.x + box.width * 0.4, y = box.y + box.height - 10;
+  await page.mouse.move(x, y);
+  // Zoomed in, as when annotating notes
+  for (let i = 0; i < 25; i++) await page.mouse.wheel(0, -100);
+  await page.mouse.down();
+  // The hand wobbles right and back a little before the button is released
+  await page.mouse.move(x + 3, y, { steps: 3 });
+  await page.mouse.move(x + 1, y);
+  await page.mouse.up();
+  await expect(page.getByTitle('Loop Selection')).not.toHaveClass(/bg-blue-200/);
+});
+
+test('double-clicking a note keeps the view and Escape clears the selection', async ({ page }, testInfo) => {
+  const duration = 30;
+  const wav = writeToneWav(testInfo, [[220, 2], [330, 2], [262, 26]]);
+  await loadAudio(page, wav);
+  await page.keyboard.press('KeyF');
+  const box = await viewGeometry(page);
+  const c = makeCoords(box, box.width / duration);
+  await createNote(page, c, 10, 11);
+  await page.keyboard.press('Escape');
+
+  // Zoom in around the note (the time under the mouse stays put)
+  await page.mouse.move(c.x(10.5), c.y(262));
+  for (let i = 0; i < 6; i++) await page.mouse.wheel(0, -100);
+  const viewX = async () => (await page.getByTestId('minimap-view').boundingBox())!.x;
+  const before = await viewX();
+
+  await page.mouse.dblclick(c.x(10.5), c.y(262));
+  await expect(page.locator('input[type="number"]')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(Math.abs(await viewX() - before)).toBeLessThan(1);
+  const loop = page.getByTitle('Loop Selection');
+  await expect(loop).toHaveClass(/bg-blue-200/);
+
+  await page.keyboard.press('Escape');
+  await expect(loop).not.toHaveClass(/bg-blue-200/);
+});
+
+test('Shift+Arrow selects f0 frame by frame', async ({ page }, testInfo) => {
+  const wav = writeToneWav(testInfo, [[220, 5]]);
+  await loadAudio(page, wav);
+  const loop = page.getByTitle('Loop Selection');
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(loop).toHaveClass(/bg-blue-200/);
+  // Back to nothing selected
+  await page.keyboard.press('Shift+ArrowLeft');
+  await expect(loop).not.toHaveClass(/bg-blue-200/);
+});

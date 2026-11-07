@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moveNoteBoundary, resizeNoteWithPush } from '../../utils/noteUtils';
+import { moveNoteBoundary, resizeNoteWithPush, placeNewNote, fallbackNotePitch, isFrameInRange } from '../../utils/noteUtils';
 import { Note, PitchFrame } from '../../types';
 
 const note = (id: string, start: number, end: number, pitch = 220): Note => ({ id, start, end, pitch });
@@ -53,5 +53,38 @@ describe('resizeNoteWithPush', () => {
     expect(r.a.end).toBe(0.5);
     expect(r.b.pitch).toBe(300);
     expect(r.a.pitch).toBe(200);
+  });
+});
+
+describe('placeNewNote', () => {
+  it('refuses a note inside a longer note', () => {
+    expect(placeNewNote([note('a', 0, 4)], 1, 2).range).toBeNull();
+  });
+  it('trims the new note to the gap between overlapping neighbours', () => {
+    const r = placeNewNote([note('a', 0, 1), note('b', 2, 3)], 0.8, 2.4);
+    expect(r.range).toEqual([1, 2]);
+    expect(r.kept.map(n => n.id)).toEqual(['a', 'b']);
+  });
+  it('replaces notes whose middle is inside the selection', () => {
+    const r = placeNewNote([note('a', 1, 2), note('b', 3, 4)], 0.5, 2.5);
+    expect(r.range).toEqual([0.5, 2.5]);
+    expect(r.kept.map(n => n.id)).toEqual(['b']);
+  });
+});
+
+describe('fallbackNotePitch', () => {
+  it('uses the nearest note, then nearby f0, then A3', () => {
+    expect(fallbackNotePitch([note('a', 0, 1, 300), note('b', 5, 6, 400)], [], 1.5, 2)).toBe(300);
+    const frames: PitchFrame[] = [{ timestamp: 3, frequency: 250, hasPitch: true } as PitchFrame];
+    expect(fallbackNotePitch([], frames, 1.5, 2)).toBe(250);
+    expect(fallbackNotePitch([], [], 1.5, 2)).toBe(220);
+  });
+});
+
+describe('isFrameInRange', () => {
+  it('covers exactly one frame for a one-frame selection', () => {
+    const hop = 0.01;
+    const frames = [0, 1, 2, 3].map(k => k * hop);
+    expect(frames.filter(t => isFrameInRange(t, hop, 2 * hop))).toEqual([hop]);
   });
 });
